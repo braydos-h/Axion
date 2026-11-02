@@ -1,10 +1,11 @@
 use axion::{
     ai::ClefClient,
     api, capture,
-    config::{Cli, Command},
+    config::{Cli, Command, Settings},
     detection::{self, Classification},
     flow::{Flow, FlowTable},
     packet::{Packet, Protocol},
+    server,
     state::{AppState, FlowView, Status},
 };
 use clap::Parser;
@@ -26,48 +27,41 @@ fn now_ms() -> u64 {
         .as_millis()
         .min(u128::from(u64::MAX)) as u64
 }
-fn enabled() -> bool {
-    std::env::var("AXION_AI_ENABLED")
-        .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
-        .unwrap_or(true)
-}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     dotenvy::dotenv().ok();
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "axion=info".into()),
-        )
-        .init();
     let cli = Cli::parse();
-    if matches!(cli.command, Command::Interfaces) {
-        for name in capture::interfaces().map_err(anyhow::Error::msg)? {
-            println!("{name}");
+    if matches!(cli.command, Some(Command::Interfaces)) {
+        for interface in capture::interface_details().map_err(anyhow::Error::msg)? {
+            println!("{}", serde_json::to_string(&interface)?);
         }
         return Ok(());
     }
-    anyhow::ensure!(
-        cli.max_flows > 0 && cli.max_flows <= 1_000_000,
-        "--max-flows must be between 1 and 1000000"
-    );
-    anyhow::ensure!(
-        cli.flow_timeout_seconds > 0,
-        "--flow-timeout-seconds must be positive"
-    );
-    let (mode, interface) = match &cli.command {
-        Command::Capture { interface } => {
-            anyhow::ensure!(
-                capture::interfaces()
-                    .map_err(anyhow::Error::msg)?
-                    .contains(interface),
-                "Interface '{interface}' not found; run 'axion interfaces'"
-            );
-            ("live", interface.clone())
-        }
+    let settings = cli.resolve(
+        Settings::load().map_err(|e| anyhow::anyhow!("Cannot load configuration: {e}"))?,
+    )?;
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(&settings.log_filter)),
+        )
+        .init();
+    let explicit_capture = matches!(cli.command, Some(Command::Capture { .. }));
+    let command = cli.command.unwrap_or(Command::Capture {
+        interface: if settings.auto_interface {
+            "auto".into()
+        } else {
+            settings
+                .preferred_interface
+                .clone()
+                .unwrap_or_else(|| "auto".into())
+        },
+    });
+    let (mode, interface) = match &command {
+        Command::Capture { interface } => ("live", interface.clone()),
         Command::Replay { file } => ("replay", file.display().to_string()),
-        Command::Demo => ("demo — simulated traffic", "simulated".to_string()),
+        Command::Demo => ("demo — simulated traffic", "simulated".into()),
         Command::Interfaces => unreachable!(),
     };
     let ai_client = match ClefClient::from_env() {
@@ -77,115 +71,169 @@ async fn main() -> anyhow::Result<()> {
             None
         }
     };
-    let ai_enabled = enabled() && !matches!(cli.command, Command::Demo);
-    let mut state = AppState::new(Status {
-        capture_running: true,
-        ai_status: if !ai_enabled { "disabled" } else { "offline" }.into(),
-        ai_enabled,
-        interface,
-        mode: mode.into(),
-        last_error: None,
-    });
-    let mut allowed_hosts = vec![cli.web_host.to_ascii_lowercase()];
-    if cli.web_host == "127.0.0.1" || cli.web_host == "localhost" || cli.web_host == "::1" {
-        allowed_hosts.extend(["localhost".into(), "127.0.0.1".into(), "::1".into()]);
-    }
-    state.allowed_hosts = Arc::new(allowed_hosts);
+    let ai_enabled = settings.ai_enabled && !matches!(command, Command::Demo);
     if ai_client.is_none() && ai_enabled {
         warn!("Cloud AI unavailable: configure Cloudflare account and token");
     }
+    let mut state = AppState::new(Status {
+        capture_running: false,
+        ai_status: if !ai_enabled { "disabled" } else { "offline" }.into(),
+        ai_enabled,
+        interface: interface.clone(),
+        mode: mode.into(),
+        last_error: None,
+    });
+    *state.settings.write().await = settings.clone();
+    state.active_settings = Arc::new(settings.clone());
+    let mut allowed_hosts = vec![settings
+        .web_host
+        .trim_matches(['[', ']'])
+        .to_ascii_lowercase()];
+    if ["127.0.0.1", "localhost", "::1"].contains(&settings.web_host.as_str()) {
+        allowed_hosts.extend(["localhost".into(), "127.0.0.1".into(), "::1".into()]);
+    }
+    state.allowed_hosts = Arc::new(allowed_hosts);
     let (packet_tx, packet_rx) = mpsc::channel(4096);
     let (ai_tx, ai_rx) = mpsc::channel(128);
-    let shutdown = state.shutdown.clone();
     let raw_packets = Arc::new(AtomicU64::new(0));
     let raw_bytes = Arc::new(AtomicU64::new(0));
     let dropped = Arc::new(AtomicU64::new(0));
+    let manager = Arc::new(capture::Manager::new(
+        packet_tx.clone(),
+        dropped.clone(),
+        raw_packets.clone(),
+        raw_bytes.clone(),
+    ));
+    if mode == "live" {
+        state.capture = Some(manager.clone());
+    }
     tokio::spawn(analysis_worker(state.clone(), ai_client, ai_rx));
     tokio::spawn(flow_worker(
         state.clone(),
         packet_rx,
         ai_tx,
         (dropped.clone(), raw_packets.clone(), raw_bytes.clone()),
-        cli.max_flows,
-        cli.flow_timeout_seconds.saturating_mul(1000),
+        settings.max_flows,
+        settings.flow_timeout_seconds.saturating_mul(1000),
         mode == "live",
     ));
-    let source_state = state.clone();
-    let source_shutdown = shutdown.clone();
-    let source_dropped = dropped.clone();
-    let source_packets = raw_packets.clone();
-    let source_bytes = raw_bytes.clone();
-    let source_command = cli.command;
-    tokio::spawn(async move {
-        let result = match source_command {
-            Command::Capture { interface } => {
-                tokio::task::spawn_blocking(move || {
-                    capture::live(
-                        &interface,
-                        packet_tx,
-                        source_shutdown,
-                        source_dropped,
-                        source_packets,
-                        source_bytes,
-                    )
-                })
-                .await
-            }
-            Command::Replay { file } => {
-                tokio::task::spawn_blocking(move || {
+
+    let listener = server::bind(&settings.web_host, settings.web_port, settings.strict_port)
+        .await
+        .map_err(|e| {
+            anyhow::anyhow!(
+                "Cannot bind dashboard to {}:{}: {e}",
+                settings.web_host,
+                settings.web_port
+            )
+        })?;
+    let address = listener.local_addr()?;
+    let url = server::url(address);
+    println!("Axion dashboard: {url}");
+    info!("Dashboard listening on {url} ({mode})");
+    if settings.open_browser {
+        if let Err(e) = server::open_browser(&url) {
+            warn!("Could not open browser: {e}");
+        }
+    }
+
+    match command {
+        Command::Capture { interface } if settings.start_capture || explicit_capture => {
+            let capture_state = state.clone();
+            let manager = manager.clone();
+            tokio::spawn(async move {
+                let _guard = capture_state.capture_control.lock().await;
+                let chosen = if interface == "auto" {
+                    capture::auto_interface()
+                } else {
+                    Ok(interface)
+                };
+                let result = match chosen {
+                    Ok(name) => manager.start(capture_state.clone(), name).await,
+                    Err(e) => Err(e),
+                };
+                if let Err(e) = result {
+                    warn!("Live capture unavailable: {e}. The dashboard remains available; use demo or replay without capture privileges.");
+                    let mut inner = capture_state.inner.write().await;
+                    inner.status.last_error = Some(e);
+                    let status = inner.status.clone();
+                    drop(inner);
+                    capture_state.emit("status", &status);
+                }
+            });
+        }
+        Command::Replay { file } => {
+            let source_state = state.clone();
+            let shutdown = state.shutdown.clone();
+            tokio::spawn(async move {
+                {
+                    let mut inner = source_state.inner.write().await;
+                    inner.status.capture_running = true;
+                    let status = inner.status.clone();
+                    drop(inner);
+                    source_state.emit("status", &status);
+                }
+                let result = tokio::task::spawn_blocking(move || {
                     capture::replay(
                         &file.to_string_lossy(),
                         packet_tx,
-                        source_shutdown,
-                        source_dropped,
-                        source_packets,
-                        source_bytes,
+                        shutdown,
+                        dropped,
+                        raw_packets,
+                        raw_bytes,
                     )
                 })
-                .await
-            }
-            Command::Demo => {
-                demo(packet_tx, source_shutdown, source_packets, source_bytes).await;
-                Ok(Ok(()))
-            }
-            Command::Interfaces => unreachable!(),
-        };
-        let failure = match result {
-            Ok(Ok(())) => {
-                info!("Capture source stopped");
-                None
-            }
-            Ok(Err(e)) => {
-                error!("{e}");
-                Some(e)
-            }
-            Err(e) => {
-                let message = format!("Capture task failed: {e}");
-                error!("{message}");
-                Some(message)
-            }
-        };
-        let mut inner = source_state.inner.write().await;
-        inner.status.capture_running = false;
-        inner.status.last_error = failure;
-        let status = inner.status.clone();
-        drop(inner);
-        source_state.emit("status", &status);
-    });
-    let listener = tokio::net::TcpListener::bind((cli.web_host.as_str(), cli.web_port)).await?;
-    info!(
-        "Dashboard listening on http://{}:{} ({mode})",
-        cli.web_host, cli.web_port
-    );
-    let stop = shutdown.clone();
-    axum::serve(listener, api::router(state))
+                .await;
+                let failure = match result {
+                    Ok(Ok(())) => None,
+                    Ok(Err(e)) => Some(e),
+                    Err(e) => Some(format!("Replay task failed: {e}")),
+                };
+                let mut inner = source_state.inner.write().await;
+                inner.status.capture_running = false;
+                inner.status.last_error = failure;
+                let status = inner.status.clone();
+                drop(inner);
+                source_state.emit("status", &status);
+            });
+        }
+        Command::Demo => {
+            let source_state = state.clone();
+            let shutdown = state.shutdown.clone();
+            tokio::spawn(async move {
+                {
+                    let mut inner = source_state.inner.write().await;
+                    inner.status.capture_running = true;
+                    let status = inner.status.clone();
+                    drop(inner);
+                    source_state.emit("status", &status);
+                }
+                demo(packet_tx, shutdown, raw_packets, raw_bytes).await;
+                let mut inner = source_state.inner.write().await;
+                inner.status.capture_running = false;
+                let status = inner.status.clone();
+                drop(inner);
+                source_state.emit("status", &status);
+            });
+        }
+        _ => {}
+    }
+    let shutdown = state.shutdown.clone();
+    axum::serve(listener, api::router(state.clone()))
         .with_graceful_shutdown(async move {
-            if let Err(error) = tokio::signal::ctrl_c().await {
-                error!("Cannot listen for Ctrl+C: {error}");
+            if let Err(e) = tokio::signal::ctrl_c().await {
+                error!("Cannot listen for Ctrl+C: {e}");
             }
-            stop.store(true, Ordering::Relaxed);
+            shutdown.store(true, Ordering::Relaxed);
         })
         .await?;
+    {
+        let _guard = state.capture_control.lock().await;
+        manager
+            .stop(state.clone())
+            .await
+            .map_err(anyhow::Error::msg)?;
+    }
     Ok(())
 }
 
@@ -242,6 +290,8 @@ async fn flow_worker(
                 inner.stats.packets_captured = raw_packets.load(Ordering::Relaxed);
                 inner.stats.total_bytes = raw_bytes.load(Ordering::Relaxed);
                 inner.stats.active_flows = table.len();
+                inner.stats.tcp_flows = inner.flows.values().filter(|v| v.flow.protocol == Protocol::Tcp).count();
+                inner.stats.udp_flows = inner.flows.values().filter(|v| v.flow.protocol == Protocol::Udp).count();
                 inner.stats.dropped_capture_events = dropped.load(Ordering::Relaxed);
                 inner.stats.packets_per_second = inner.stats.packets_captured.saturating_sub(last_packets);
                 last_packets = inner.stats.packets_captured;

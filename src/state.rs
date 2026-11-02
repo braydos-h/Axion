@@ -1,10 +1,12 @@
-use crate::{ai::ClefResult, detection::LocalDetection, flow::Flow};
+use crate::{
+    ai::ClefResult, capture::Manager, config::Settings, detection::LocalDetection, flow::Flow,
+};
 use serde::Serialize;
 use std::{
     collections::HashMap,
     sync::{atomic::AtomicBool, Arc},
 };
-use tokio::sync::{broadcast, RwLock};
+use tokio::sync::{broadcast, Mutex, RwLock};
 
 #[derive(Clone, Serialize)]
 pub struct FlowView {
@@ -29,6 +31,8 @@ pub struct Status {
 pub struct Stats {
     pub packets_captured: u64,
     pub active_flows: usize,
+    pub tcp_flows: usize,
+    pub udp_flows: usize,
     pub total_bytes: u64,
     pub suspicious_flows: usize,
     pub ai_classified_flows: u64,
@@ -56,6 +60,12 @@ pub struct AppState {
     pub events: broadcast::Sender<Event>,
     pub allowed_hosts: Arc<Vec<String>>,
     pub shutdown: Arc<AtomicBool>,
+    pub capture: Option<Arc<Manager>>,
+    pub capture_control: Arc<Mutex<()>>,
+    pub settings_control: Arc<Mutex<()>>,
+    pub settings: Arc<RwLock<Settings>>,
+    pub active_settings: Arc<Settings>,
+    pub settings_path: Option<std::path::PathBuf>,
 }
 
 impl AppState {
@@ -70,6 +80,12 @@ impl AppState {
             events,
             allowed_hosts: Arc::new(vec!["localhost".into(), "127.0.0.1".into(), "::1".into()]),
             shutdown: Arc::new(AtomicBool::new(false)),
+            capture: None,
+            capture_control: Arc::new(Mutex::new(())),
+            settings_control: Arc::new(Mutex::new(())),
+            settings: Arc::new(RwLock::new(Settings::default())),
+            active_settings: Arc::new(Settings::default()),
+            settings_path: Settings::path().ok(),
         }
     }
     pub fn emit<T: Serialize>(&self, kind: &str, value: &T) {

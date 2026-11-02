@@ -5,6 +5,7 @@ pub mod config;
 pub mod detection;
 pub mod flow;
 pub mod packet;
+pub mod server;
 pub mod state;
 pub mod tls;
 pub mod websocket;

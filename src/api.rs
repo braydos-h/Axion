@@ -1,6 +1,6 @@
 use crate::state::AppState;
 use axum::{
-    extract::{Path, Query, State},
+    extract::{rejection::JsonRejection, Path, Query, State},
     http::{HeaderMap, Request as HttpRequest, StatusCode},
     middleware::{self, Next},
     response::{Html, IntoResponse, Response},
@@ -18,6 +18,12 @@ pub fn router(state: AppState) -> Router {
         .route("/api/health", get(health))
         .route("/api/status", get(status))
         .route("/api/interfaces", get(interfaces))
+        .route("/api/interfaces/auto", post(select_auto))
+        .route("/api/capture/start", post(start_capture))
+        .route("/api/capture/stop", post(stop_capture))
+        .route("/api/capture/restart", post(restart_capture))
+        .route("/api/config", get(get_config).put(update_config))
+        .route("/api/config/reset", post(reset_config))
         .route("/api/flows", get(flows))
         .route("/api/flows/{id}", get(flow))
         .route("/api/stats", get(stats))
@@ -81,23 +87,99 @@ async fn status(State(state): State<AppState>) -> impl IntoResponse {
 async fn stats(State(state): State<AppState>) -> impl IntoResponse {
     Json(state.inner.read().await.stats.clone())
 }
+fn parse_json<T>(input: Result<Json<T>, JsonRejection>) -> Result<T, (StatusCode, String)> {
+    input
+        .map(|Json(value)| value)
+        .map_err(|e| (e.status(), e.body_text()))
+}
+fn error(status: StatusCode, message: impl ToString) -> Response {
+    (status, Json(json!({"error": message.to_string()}))).into_response()
+}
 async fn interfaces() -> Response {
-    match tokio::task::spawn_blocking(pcap::Device::list).await {
+    match tokio::task::spawn_blocking(crate::capture::interface_details).await {
         Ok(Ok(devices)) => {
-            Json(json!({"interfaces": devices.into_iter().map(|d| d.name).collect::<Vec<_>>() }))
-                .into_response()
+            let names: Vec<_> = devices.iter().map(|d| d.name.clone()).collect();
+            Json(json!({"interfaces": names, "details": devices})).into_response()
         }
-        Ok(Err(error)) => (
-            StatusCode::SERVICE_UNAVAILABLE,
-            format!("Could not enumerate capture interfaces: {error}"),
-        )
-            .into_response(),
-        Err(_) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "Interface enumeration failed",
-        )
-            .into_response(),
+        Ok(Err(e)) => error(StatusCode::SERVICE_UNAVAILABLE, e),
+        Err(e) => error(StatusCode::INTERNAL_SERVER_ERROR, e),
     }
+}
+fn persist_settings(state: &AppState, settings: &crate::config::Settings) -> anyhow::Result<()> {
+    let path = state
+        .settings_path
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("Cannot determine user configuration directory"))?;
+    settings.save_to(path)
+}
+async fn get_config(State(state): State<AppState>) -> Response {
+    Json(state.settings.read().await.clone()).into_response()
+}
+async fn save_config(state: AppState, settings: crate::config::Settings) -> Response {
+    let _guard = state.settings_control.lock().await;
+    save_config_locked(&state, settings).await
+}
+async fn save_config_locked(state: &AppState, settings: crate::config::Settings) -> Response {
+    if let Err(e) = settings.validate() {
+        return error(StatusCode::BAD_REQUEST, e);
+    }
+    if settings.ai_enabled && state.inner.read().await.status.mode.starts_with("demo") {
+        return error(
+            StatusCode::CONFLICT,
+            "Cloud analysis is unavailable for simulated demo traffic",
+        );
+    }
+    if let Err(e) = persist_settings(state, &settings) {
+        return error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Could not save settings: {e}"),
+        );
+    }
+    let previous = &state.active_settings;
+    let restart_required = previous.web_host != settings.web_host
+        || previous.web_port != settings.web_port
+        || previous.strict_port != settings.strict_port
+        || previous.max_flows != settings.max_flows
+        || previous.flow_timeout_seconds != settings.flow_timeout_seconds
+        || previous.log_filter != settings.log_filter;
+    *state.settings.write().await = settings.clone();
+    let mut inner = state.inner.write().await;
+    inner.status.ai_enabled = settings.ai_enabled;
+    if !settings.ai_enabled {
+        inner.status.ai_status = "disabled".into();
+    } else if inner.status.ai_status == "disabled" {
+        inner.status.ai_status = "offline".into();
+    }
+    let status = inner.status.clone();
+    drop(inner);
+    state.emit("status", &status);
+    Json(json!({"settings": settings, "restart_required": restart_required})).into_response()
+}
+async fn update_config(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    input: Result<Json<crate::config::Settings>, JsonRejection>,
+) -> Response {
+    if !same_origin(&headers) {
+        return error(
+            StatusCode::FORBIDDEN,
+            "Cross-origin controls are not allowed",
+        );
+    }
+    let settings = match parse_json(input) {
+        Ok(value) => value,
+        Err((status, message)) => return error(status, message),
+    };
+    save_config(state, settings).await
+}
+async fn reset_config(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if !same_origin(&headers) {
+        return error(
+            StatusCode::FORBIDDEN,
+            "Cross-origin controls are not allowed",
+        );
+    }
+    save_config(state, crate::config::Settings::default()).await
 }
 #[derive(Deserialize)]
 struct FlowQuery {
@@ -127,7 +209,7 @@ struct AiControl {
 async fn control_ai(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Json(input): Json<AiControl>,
+    input: Result<Json<AiControl>, JsonRejection>,
 ) -> Response {
     if !same_origin(&headers) {
         return (
@@ -136,73 +218,181 @@ async fn control_ai(
         )
             .into_response();
     }
-    let mut inner = state.inner.write().await;
-    if input.enabled && inner.status.mode.starts_with("demo") {
-        return (
-            StatusCode::CONFLICT,
-            "Cloud analysis is unavailable for simulated demo traffic",
-        )
-            .into_response();
+    let input = match parse_json(input) {
+        Ok(value) => value,
+        Err((status, message)) => return error(status, message),
+    };
+    let _guard = state.settings_control.lock().await;
+    let mut settings = state.settings.read().await.clone();
+    settings.ai_enabled = input.enabled;
+    let response = save_config_locked(&state, settings).await;
+    if response.status() != StatusCode::OK {
+        return response;
     }
-    inner.status.ai_enabled = input.enabled;
-    if !input.enabled {
-        inner.status.ai_status = "disabled".into();
-    } else if inner.status.ai_status == "disabled" {
-        inner.status.ai_status = "offline".into();
-    }
-    let status = inner.status.clone();
-    drop(inner);
-    state.emit("status", &status);
-    Json(status).into_response()
+    Json(state.inner.read().await.status.clone()).into_response()
 }
 #[derive(Deserialize)]
 struct InterfaceControl {
     interface: String,
 }
+#[derive(Default, Deserialize)]
+struct CaptureControl {
+    interface: Option<String>,
+}
+async fn perform_capture(
+    state: AppState,
+    action: &str,
+    requested: Option<String>,
+    persist: bool,
+) -> Response {
+    let _guard = state.capture_control.lock().await;
+    let Some(manager) = state.capture.as_ref() else {
+        return error(
+            StatusCode::CONFLICT,
+            "Live capture controls are unavailable in this mode",
+        );
+    };
+    let current = state.inner.read().await.status.interface.clone();
+    let name = requested.unwrap_or_else(|| {
+        if current.is_empty() {
+            "auto".into()
+        } else {
+            current
+        }
+    });
+    if name.trim().is_empty() || name.len() > 256 {
+        return error(StatusCode::BAD_REQUEST, "Invalid interface name");
+    }
+    let result = match action {
+        "stop" => manager.stop(state.clone()).await,
+        "start" => manager.start(state.clone(), name.clone()).await,
+        "restart" => manager.restart(state.clone(), name.clone()).await,
+        "select" => {
+            if state.inner.read().await.status.capture_running {
+                manager.restart(state.clone(), name.clone()).await
+            } else {
+                let candidate = name.clone();
+                match tokio::task::spawn_blocking(move || {
+                    if candidate == "auto" {
+                        crate::capture::auto_interface()
+                    } else if crate::capture::interfaces()?.contains(&candidate) {
+                        Ok(candidate)
+                    } else {
+                        Err("Interface not found".into())
+                    }
+                })
+                .await
+                {
+                    Ok(Ok(selected)) => {
+                        let mut inner = state.inner.write().await;
+                        inner.status.interface = selected;
+                        inner.status.last_error = None;
+                        let status = inner.status.clone();
+                        drop(inner);
+                        state.emit("status", &status);
+                        Ok(())
+                    }
+                    Ok(Err(e)) => Err(e),
+                    Err(e) => Err(e.to_string()),
+                }
+            }
+        }
+        _ => unreachable!(),
+    };
+    if let Err(e) = result {
+        let mut inner = state.inner.write().await;
+        inner.status.last_error = Some(e.clone());
+        let status = inner.status.clone();
+        drop(inner);
+        state.emit("status", &status);
+        return error(StatusCode::CONFLICT, e);
+    }
+    if persist {
+        let _settings_guard = state.settings_control.lock().await;
+        let mut settings = state.settings.write().await;
+        let mut updated = settings.clone();
+        updated.auto_interface = name == "auto";
+        updated.preferred_interface = if name == "auto" { None } else { Some(name) };
+        if let Err(e) = persist_settings(&state, &updated) {
+            return error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Interface changed but settings could not be saved: {e}"),
+            );
+        }
+        *settings = updated;
+    }
+    Json(state.inner.read().await.status.clone()).into_response()
+}
+async fn start_capture(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    input: Result<Json<CaptureControl>, JsonRejection>,
+) -> Response {
+    if !same_origin(&headers) {
+        return error(
+            StatusCode::FORBIDDEN,
+            "Cross-origin controls are not allowed",
+        );
+    }
+    let input = match parse_json(input) {
+        Ok(value) => value,
+        Err((status, message)) => return error(status, message),
+    };
+    let persist = input.interface.is_some();
+    perform_capture(state, "start", input.interface, persist).await
+}
+async fn stop_capture(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if !same_origin(&headers) {
+        return error(
+            StatusCode::FORBIDDEN,
+            "Cross-origin controls are not allowed",
+        );
+    }
+    perform_capture(state, "stop", None, false).await
+}
+async fn restart_capture(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    input: Result<Json<CaptureControl>, JsonRejection>,
+) -> Response {
+    if !same_origin(&headers) {
+        return error(
+            StatusCode::FORBIDDEN,
+            "Cross-origin controls are not allowed",
+        );
+    }
+    let input = match parse_json(input) {
+        Ok(value) => value,
+        Err((status, message)) => return error(status, message),
+    };
+    let persist = input.interface.is_some();
+    perform_capture(state, "restart", input.interface, persist).await
+}
 async fn control_interface(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Json(input): Json<InterfaceControl>,
+    input: Result<Json<InterfaceControl>, JsonRejection>,
 ) -> Response {
     if !same_origin(&headers) {
-        return (
+        return error(
             StatusCode::FORBIDDEN,
             "Cross-origin controls are not allowed",
-        )
-            .into_response();
+        );
     }
-    if input.interface.is_empty() || input.interface.len() > 256 {
-        return (StatusCode::BAD_REQUEST, "Invalid interface name").into_response();
+    let input = match parse_json(input) {
+        Ok(value) => value,
+        Err((status, message)) => return error(status, message),
+    };
+    perform_capture(state, "select", Some(input.interface), true).await
+}
+async fn select_auto(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if !same_origin(&headers) {
+        return error(
+            StatusCode::FORBIDDEN,
+            "Cross-origin controls are not allowed",
+        );
     }
-    let name = input.interface.clone();
-    match tokio::task::spawn_blocking(move || {
-        pcap::Device::list().map(|devices| devices.iter().any(|d| d.name == name))
-    })
-    .await
-    {
-        Ok(Ok(true)) => {}
-        Ok(Ok(false)) => return (StatusCode::BAD_REQUEST, "Interface not found").into_response(),
-        _ => {
-            return (
-                StatusCode::SERVICE_UNAVAILABLE,
-                "Could not enumerate interfaces",
-            )
-                .into_response()
-        }
-    }
-    let mut inner = state.inner.write().await;
-    if inner.status.capture_running {
-        return (
-            StatusCode::CONFLICT,
-            "Stop capture before selecting an interface",
-        )
-            .into_response();
-    }
-    inner.status.interface = input.interface;
-    let status = inner.status.clone();
-    drop(inner);
-    state.emit("status", &status);
-    Json(status).into_response()
+    perform_capture(state, "select", Some("auto".into()), true).await
 }
 
 // Browsers send Origin for POSTs; reject foreign origins and cross-site fetches.
@@ -240,14 +430,81 @@ mod tests {
     use tower::ServiceExt;
 
     fn test_state() -> AppState {
-        AppState::new(Status {
+        let mut state = AppState::new(Status {
             capture_running: false,
             ai_status: "disabled".into(),
             interface: "".into(),
             mode: "live".into(),
             ai_enabled: false,
             last_error: None,
-        })
+        });
+        state.settings_path = Some(std::env::temp_dir().join(format!(
+            "axion-api-test-{}-{:?}.json",
+            std::process::id(),
+            std::thread::current().id()
+        )));
+        state
+    }
+    #[tokio::test]
+    async fn config_validation_malformed_json_and_origin_are_rejected() {
+        let state = test_state();
+        let app = router(state.clone());
+        let settings = crate::config::Settings {
+            web_host: "0.0.0.0".into(),
+            ..Default::default()
+        };
+        let invalid = Request::builder()
+            .method("PUT")
+            .uri("/api/config")
+            .header("host", "127.0.0.1:8080")
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::to_string(&settings).unwrap()))
+            .unwrap();
+        let response = app.clone().oneshot(invalid).await.unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = to_bytes(response.into_body(), 4096).await.unwrap();
+        assert!(serde_json::from_slice::<serde_json::Value>(&body).unwrap()["error"].is_string());
+        let malformed = Request::builder()
+            .method("POST")
+            .uri("/api/capture/start")
+            .header("host", "127.0.0.1:8080")
+            .header("content-type", "application/json")
+            .body(Body::from("{"))
+            .unwrap();
+        let response = app.clone().oneshot(malformed).await.unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = to_bytes(response.into_body(), 4096).await.unwrap();
+        assert!(serde_json::from_slice::<serde_json::Value>(&body).unwrap()["error"].is_string());
+        let foreign = Request::builder()
+            .method("POST")
+            .uri("/api/capture/stop")
+            .header("host", "127.0.0.1:8080")
+            .header("origin", "https://attacker.invalid")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(foreign).await.unwrap().status(),
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(state.settings.read().await.web_host, "127.0.0.1");
+    }
+    #[tokio::test]
+    async fn demo_rejects_enabling_cloud_analysis() {
+        let state = test_state();
+        state.inner.write().await.status.mode = "demo — simulated traffic".into();
+        let app = router(state.clone());
+        let request = Request::builder()
+            .method("POST")
+            .uri("/api/control/ai")
+            .header("host", "127.0.0.1:8080")
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"enabled":true}"#))
+            .unwrap();
+        assert_eq!(
+            app.oneshot(request).await.unwrap().status(),
+            StatusCode::CONFLICT
+        );
+        assert!(!state.inner.read().await.status.ai_enabled);
     }
     #[tokio::test]
     async fn health_status_flows_and_missing_flow() {

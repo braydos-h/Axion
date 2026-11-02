@@ -1,60 +1,107 @@
 # Axion
 
-Axion is a passive Rust network traffic intelligence tool. It groups observed TCP and UDP packets into bidirectional flows, extracts visible TLS ClientHello metadata, and uses conservative local heuristics to flag sustained traffic for review. An optional Cloudflare Clef typed-decision request can give a separate model assessment of selected flows. The browser dashboard is served by the same executable.
+Axion is a passive network traffic intelligence application written in Rust. It groups observed TCP and UDP packets into flows, extracts visible TLS ClientHello metadata, and presents local heuristics and optional Cloudflare Workers AI assessments in an embedded, local web dashboard.
 
-**Detection only:** Axion captures copies of packets. It does not decrypt, inject, drop, block, reset or terminate traffic, or change firewall rules. A TLS fingerprint, address, port, or SNI is not proof of VLESS. REALITY is designed to resemble ordinary TLS; neither the local heuristic nor Clef can verify VLESS/REALITY from these metadata. Unknown is the default. No detection rate has been established. Model scores are model outputs, not measured probabilities of correctness.
+Axion observes copies of traffic. It does **not** inject, modify, block, or decrypt packets. Detection is heuristic: a fingerprint, SNI, port, or model score does not prove that a connection uses a particular protocol. Test only networks and captures you are authorized to inspect.
 
-The research target is the [VLESS + REALITY + XTLS Vision installer](https://github.com/braydos-h/vless-xtls-vision-installer), which configures Xray's RAW/TCP transport with configurable camouflage. These generic behavioral signals also occur in ordinary applications. Test against your own authorized traffic.
+## Quick start
 
-## Requirements and build
+```sh
+axion
+```
 
-Linux is the primary target. Install a Rust toolchain with [rustup](https://rustup.rs/) and libpcap headers, for example:
+Axion loads your settings, starts the local dashboard, and attempts to select and capture from an interface. Open the URL printed in the terminal; the browser does not open automatically unless enabled in settings or with `--open-browser`. The default is `http://127.0.0.1:8080/`; if the port is occupied, Axion tries the next ten ports. A capture-permission or interface-selection error leaves the dashboard available so you can choose an interface or restart Axion in demo/replay mode. Press Ctrl+C to shut down.
 
-```bash
+```sh
+axion interfaces                         # list capture interfaces
+axion capture --interface auto --web-port 8080
+axion capture --interface eth0           # choose a specific interface
+axion demo                               # simulated data, no capture permission
+axion replay --file capture.pcap         # offline data, no capture permission
+axion --help
+```
+
+Demo traffic is explicitly marked as simulated; cloud analysis is disabled in demo mode. Replay reads the PCAP as quickly as it can process it and keeps the dashboard available afterwards. The pause control pauses display updates, not packet capture. In live mode the capture controls start, stop, restart, or switch a source; capture errors are displayed in the dashboard. Live capture controls are unavailable in demo and replay modes; restart Axion to change modes.
+
+## Install a binary
+
+Download an archive from [GitHub Releases](https://github.com/braydos-h/Axion/releases), when available. Release archives contain the executable, this README, and the GPL license; the dashboard assets are embedded in the executable. The automated release workflow targets Linux x86-64 and Linux ARM64 on native Ubuntu 24.04 runners; each archive is published only after its build and tests pass. Those binaries need a compatible Linux system with glibc 2.39 or later and the libpcap runtime. Windows and macOS release archives are not currently provided because their capture build and runtime setup has not been verified by this pipeline.
+
+For example, on Ubuntu 24.04, download the archive for your architecture and the release's `SHA256SUMS`, then:
+
+```sh
+sudo apt-get update
+sudo apt-get install libpcap0.8t64
+sha256sum --ignore-missing --check SHA256SUMS  # run alongside your downloaded archive
+# Substitute the actual version and architecture in the filename:
+tar -xzf axion-v0.1.0-linux-x86_64.tar.gz
+./axion
+```
+
+Older distributions may call the runtime package `libpcap0.8`; binaries built against newer glibc may need to be built from source on those systems. Install the executable in a directory on your `PATH` if desired. The checksum file lists every release archive; `--ignore-missing` verifies only archives you downloaded. Do not run the binary if verification fails.
+
+## Build from source
+
+Linux is the primary supported platform. Install a [Rust toolchain](https://rustup.rs/) and the libpcap development package:
+
+```sh
 sudo apt-get update
 sudo apt-get install -y build-essential pkg-config libpcap-dev
-cargo build --release
-cargo test
-cargo fmt --check
-cargo clippy --all-targets -- -D warnings
+cargo build --release --locked
+./target/release/axion
 ```
 
-Fedora users can install `gcc`, `pkgconf-pkg-config`, and `libpcap-devel`. Live capture requires suitable privileges. For testing you can run with `sudo`; alternatively use an administrator-managed capture capability such as `sudo setcap cap_net_raw,cap_net_admin=eip target/release/axion` and understand the security implications of granting capabilities to an executable. Rebuilding replaces the binary and may remove its capabilities. Offline PCAP and demo do not require capture privileges.
+Fedora users can install `gcc`, `pkgconf-pkg-config`, and `libpcap-devel`. On Windows, libpcap-compatible capture requires Npcap and its SDK at build time; on macOS, libpcap and the appropriate toolchain are required. These source builds are not covered by the release matrix. No source checkout or separate web files are required to run a built binary.
 
-## Run
+## Interface selection and permissions
 
-```bash
-axion interfaces
-sudo axion capture --interface eth0
-sudo axion capture --interface eth0 --web-port 8080
-axion replay --file capture.pcap
-axion demo
+`auto` prefers the interface whose address is used for the system route, then a single active non-loopback candidate. It does not exclude VPN or virtual adapters. If no suitable interface is found or the choice is ambiguous, select one in the dashboard or pass its name with `--interface`; `axion interfaces` shows available devices. Some adapters cannot be captured from even if they are listed. If an adapter disappears or capture fails, inspect the displayed error and select or restart a source.
+
+Live capture requires permission to open the adapter. On Linux an administrator can grant the executable `CAP_NET_RAW` and `CAP_NET_ADMIN`, for example `sudo setcap cap_net_raw,cap_net_admin=eip /path/to/axion`; grant capabilities only if you understand the security implications. Rebuilding or replacing the executable may remove capabilities. Alternatively run it with appropriate administrator privileges. Containers may also need host networking and capture capabilities. Npcap must be installed on Windows. Demo and replay do not require live-capture privileges, although the libpcap runtime is still needed.
+
+## Dashboard and configuration
+
+The dashboard binds to loopback by default and has no built-in user authentication. Axion only accepts loopback bind addresses; remote access requires an independently authenticated, secured reverse proxy. Browser Host and origin checks protect local controls. Treat flow metadata as sensitive.
+
+```sh
+axion --web-port 8090        # preferred port; tries up to ten higher ports if occupied
+axion --web-port 8080 --strict-port  # fail if 8080 is unavailable
+axion --web-port 0           # let the operating system assign a port
+axion --open-browser         # open the actual dashboard URL
+axion --no-browser           # disable browser opening
 ```
 
-When using the release build, substitute `target/release/axion` for `axion`. Open <http://127.0.0.1:8080>. Replay reads the capture as fast as processing allows and leaves the dashboard running when the file ends. Demo generates explicitly labelled simulated metadata and does not request AI analysis. Ctrl+C stops Axion. Dashboard pause only pauses display updates; it does not stop capture or affect traffic. Clear removes displayed rows locally. Interface selection is available when capture has stopped; restart `capture` with that interface to begin a new live capture.
+The actual address and port are printed on startup. IPv6 loopback can be selected with `--web-host ::1` where supported. CLI arguments take precedence over environment variables, then saved settings, then defaults. The dashboard settings persist the preferred interface, automatic selection, host and port, browser and startup choices, AI state, flow limits, and logging preference. Settings that cannot be applied to the running listener or analysis worker require a restart; the interface identifies those settings.
 
-The dashboard listens on loopback by default. Its API provides access to sensitive connection metadata and has no user authentication: keep it on loopback or use a separately secured access layer. For configuration, CLI flags can also be set via `AXION_WEB_HOST`, `AXION_WEB_PORT`, `AXION_MAX_FLOWS`, and `AXION_FLOW_TIMEOUT_SECONDS`. Run `axion --help` for options.
+The configuration file is user-specific:
 
-## Cloudflare Workers AI
+- Linux: `$XDG_CONFIG_HOME/axion/config.json`, or `~/.config/axion/config.json` when `XDG_CONFIG_HOME` is unset.
+- Windows: `%APPDATA%\axion\config.json`.
+- macOS: `~/Library/Application Support/axion/config.json`.
 
-Copy `.env.example` to `.env` and set `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN`. The token needs permission to use Workers AI for the account. The default `AXION_AI_MODEL=clef-flash` can be changed to `clef`. Set `AXION_AI_ENABLED=false` to start with cloud analysis disabled and `AXION_AI_MAX_REQUESTS_PER_MINUTE` to control request rate (default 30). Missing credentials leave local analysis operational. The indicator is offline until a request succeeds; a configured account is not tested proactively. The dashboard can toggle AI while the process is running.
+Supported environment overrides include `AXION_WEB_HOST`, `AXION_WEB_PORT`, `AXION_MAX_FLOWS`, `AXION_FLOW_TIMEOUT_SECONDS`, and `AXION_AI_ENABLED`. `RUST_LOG` controls logging for the current run. Credentials are never saved in dashboard settings.
 
-Axion uses Cloudflare's [Workers AI REST endpoint](https://developers.cloudflare.com/workers-ai/get-started/rest-api/) and [Clef typed questions](https://developers.cloudflare.com/workers-ai/models/clef-flash/). It sends only selected flow metadata, never raw payloads or the API token to the browser. By default the request omits source/destination IP addresses and hostnames; it includes destination port, aggregate traffic statistics, TLS metadata/fingerprint and handshake observations. Set `AXION_AI_SHARE_IDENTITY=true` only if you explicitly want to include IP addresses and observable SNI. These metadata can themselves be sensitive: consult Cloudflare's data policies before enabling cloud classification. No complete browsing history is sent as a batch, although separately submitted flows may still reveal behavioral information. Clef scores are displayed separately from local heuristic scores.
+## Optional Cloudflare Workers AI
 
-The bounded AI queue receives only locally suspicious flows, at most once per flow. It uses timeout, rate spacing, retries and backoff without waiting in the capture loop. A full queue increments the analysis-drop counter. Capture-event drops indicate that the flow worker could not keep up; libpcap/kernel drops may not be included in that counter. The number of tracked flows and inactivity timeout are configurable. `AXION_WEIGHT_DURATION`, `AXION_WEIGHT_BIDIRECTIONAL`, `AXION_WEIGHT_VOLUME`, `AXION_WEIGHT_PACKETS` and `AXION_SUSPICION_THRESHOLD` accept values from 0 to 1; changes require restart. Weights and thresholds are illustrative, not validated detection rates.
+Local analysis works without Cloudflare. To use cloud analysis, set `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN` in the process environment or in a local `.env` file (see `.env.example`). The token needs Workers AI permission. Enable AI in settings or set `AXION_AI_ENABLED=true`; the default model is `clef-flash` and can be changed using `AXION_AI_MODEL`. The indicator is offline until a request succeeds. `AXION_AI_MAX_REQUESTS_PER_MINUTE` controls the rate, defaulting to 30.
 
-## Evaluation
+Only selected suspicious flow metadata is sent to the [Workers AI REST endpoint](https://developers.cloudflare.com/workers-ai/get-started/rest-api/), never raw payloads. By default IP addresses and hostnames are omitted; destination port, aggregates, and visible TLS metadata can still be sensitive. `AXION_AI_SHARE_IDENTITY=true` explicitly includes IP addresses and observed SNI. The bounded queue, request timeouts, and rate spacing keep cloud requests out of the capture loop. Model scores are separate from local heuristic scores and are not measured probabilities of correctness. Keep API credentials out of source control, logs, and shared configuration.
 
-Create a labelled set of traffic captures in a controlled environment with consent: include ordinary browsing, downloads, streaming and long-lived TLS connections, plus separate sessions using the reference installer and Xray client. Collect a PCAP on a test endpoint using a passive capture tool, e.g. `sudo tcpdump -i eth0 -s 0 -w test.pcap`; protect the capture because it can contain sensitive data. Record ground truth externally, including timestamps and endpoints; never label a flow as VLESS solely from Axion's output. Replay each file with `axion replay --file test.pcap` and compare the API/dashboard's flow results to labels. Split captures by session and environment, not individual packets, to avoid leakage between training/tuning and evaluation. Count true positives (labelled target flagged), false positives (benign flagged), and false negatives (target unflagged). Report precision = TP / (TP + FP), recall = TP / (TP + FN), and false-positive rate = FP / (FP + true negatives), with sample sizes and unknowns. Repeat across applications, networks, implementations, and capture conditions; reserve an untouched test set. Do not interpret an AI score as measured precision.
+## CI and downloadable builds
 
-## Limitations and troubleshooting
+On pushes to `main`, pull requests, and manual dispatch, the [Rust CI workflow](https://github.com/braydos-h/Axion/actions/workflows/rust.yml) runs formatting, Clippy, locked Rust tests, the Node.js dashboard contract test, a release build, and an unprivileged demo smoke test that compares all served web assets to the source files. The [Build binaries workflow](https://github.com/braydos-h/Axion/actions/workflows/build.yml) can be run manually; download its `axion-linux-x86_64` or `axion-linux-aarch64` artifact from the completed run. Both native jobs run locked tests and smoke-test the release executable before uploading versioned archives.
 
-- TLS metadata is visible only when captured and not concealed; ECH can hide SNI. TLS version here is the highest offered ClientHello version, not a negotiated result. No decryption is attempted. JA3 is computed from visible ClientHello fields; no JA4 claim is made.
-- Bounded TCP reconstruction handles fragmentation, overlaps and some out-of-order segments when the initial sequence is captured. Midstream capture, gaps, very large handshakes, IP fragmentation, unsupported link types and malformed packets may prevent extraction. UDP flows have aggregate statistics; QUIC is not decrypted or positively identified.
-- Sent/received means the first observed direction and its reverse, not necessarily local host ingress/egress; the same convention applies to the fields sent to Clef. Timestamps come from the capture. Expiration and bounded eviction may remove flow details from the API; the dashboard keeps its own bounded displayed history.
-- If capture fails, check the interface name, permissions, and libpcap installation. Containers may need host networking and appropriate capabilities. Promiscuous mode is not enabled.
-- If AI stays offline, check credentials, account permission, network connectivity, model name and Workers AI availability. Errors are logged without the API token. Local detection remains available.
-- If the UI cannot connect, check the configured bind address and port. Never expose the unauthenticated dashboard to untrusted networks.
+A tag such as `v1.0.0` starts the release workflow. It checks that the tag matches the package version, runs CI and both native builds, creates SHA-256 checksums, and creates a draft release. It publishes only after every expected asset has been uploaded and verified. Releases are not created retroactively; a tag must be pushed and the workflow must succeed. GitHub Actions availability and the resulting artifacts can be checked on the repository's Actions and Releases pages.
 
-The deterministic replay fixture is generated in the capture test; run `cargo test replay_generated_pcap` to exercise it without a saved capture file.
+## Troubleshooting and limitations
 
+- **Capture cannot start:** check interface selection, libpcap/Npcap installation, and capture permissions. Use `axion demo` or `axion replay --file ...` without elevated privileges. Promiscuous mode is not enabled.
+- **Dashboard unavailable:** use the exact printed URL; try `--web-port 0` if ports are occupied. Check that another local process is not intercepting the requested address.
+- **AI remains offline:** check credentials, token permissions, model availability, and network access. Local detection remains available.
+- **Missing TLS details:** ECH, midstream capture, packet loss, fragmentation, unsupported link types, or incomplete handshakes can hide metadata. UDP/QUIC is not decrypted. The reported TLS version is the highest offered ClientHello version, not necessarily the negotiated version.
+- **Drop counters:** capture-event drops indicate the flow worker could not keep up; libpcap or kernel drops may not be included. Flow views are bounded and expire after inactivity.
+- **Interpretation:** first-observed and reverse directions are not necessarily host ingress and egress. Heuristics can flag ordinary traffic. No validated detection rate is claimed, and a Clef score is not proof of VLESS or REALITY.
+
+For evaluation, use a consented, labelled set of benign and target sessions, split by session and environment. Record ground truth independently, replay captures, and measure precision, recall, and false-positive rate on an untouched test set. PCAPs may contain sensitive content; protect them accordingly.
+
+Axion is licensed under [GPL-3.0-only](LICENSE).

@@ -54,6 +54,57 @@ async fn stream(mut socket: WebSocket, state: AppState) {
 #[cfg(test)]
 mod tests {
     use crate::state::Event;
+    #[tokio::test]
+    async fn websocket_delivers_status_broadcast() {
+        use crate::state::{AppState, Status};
+        use std::future::IntoFuture;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let state = AppState::new(Status {
+            capture_running: false,
+            ai_status: "disabled".into(),
+            interface: "test".into(),
+            mode: "live".into(),
+            ai_enabled: false,
+            last_error: None,
+        });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server =
+            tokio::spawn(axum::serve(listener, crate::api::router(state.clone())).into_future());
+        let mut client = tokio::net::TcpStream::connect(addr).await.unwrap();
+        client.write_all(format!("GET /ws HTTP/1.1\r\nHost: {addr}\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n").as_bytes()).await.unwrap();
+        let mut response = Vec::new();
+        loop {
+            let mut byte = [0];
+            client.read_exact(&mut byte).await.unwrap();
+            response.push(byte[0]);
+            if response.ends_with(b"\r\n\r\n") {
+                break;
+            }
+        }
+        assert!(String::from_utf8(response)
+            .unwrap()
+            .contains("101 Switching Protocols"));
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            while state.events.receiver_count() == 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        state.emit("status", &serde_json::json!({"capture_running":true}));
+        let mut header = [0; 2];
+        client.read_exact(&mut header).await.unwrap();
+        assert_eq!(header[0] & 0x0f, 1);
+        let length = usize::from(header[1] & 0x7f);
+        assert!(length < 126);
+        let mut payload = vec![0; length];
+        client.read_exact(&mut payload).await.unwrap();
+        let event: serde_json::Value = serde_json::from_slice(&payload).unwrap();
+        assert_eq!(event["type"], "status");
+        assert_eq!(event["data"]["capture_running"], true);
+        server.abort();
+    }
     #[test]
     fn event_uses_the_public_type_and_data_shape() {
         let event = Event {

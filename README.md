@@ -51,7 +51,19 @@ cargo build --release --locked
 ./target/release/axion
 ```
 
-Fedora users can install `gcc`, `pkgconf-pkg-config`, and `libpcap-devel`. On Windows, libpcap-compatible capture requires Npcap and its SDK at build time; on macOS, libpcap and the appropriate toolchain are required. These source builds are not covered by the release matrix. No source checkout or separate web files are required to run a built binary.
+Fedora users can install `gcc`, `pkgconf-pkg-config`, and `libpcap-devel`. On macOS, libpcap and the appropriate toolchain are required. Windows and macOS source builds are not covered by the release matrix. No source checkout or separate web files are required to run a built binary.
+
+### Windows source build
+
+Install [Npcap and its SDK](https://npcap.com/#download), and extract the SDK to a user-writable directory. The runtime and SDK are separate: the runtime provides `wpcap.dll`, while the SDK provides the library needed to link Axion. For an x64 GNU Rust toolchain, set the SDK directory in PowerShell before building (replace the example path with your extraction directory):
+
+```powershell
+$env:LIBPCAP_LIBDIR = "C:\path\to\npcap-sdk\Lib\x64"
+cargo build --release --locked
+.\target\release\axion.exe
+```
+
+To save that SDK location in your user environment, run `[Environment]::SetEnvironmentVariable('LIBPCAP_LIBDIR', $env:LIBPCAP_LIBDIR, 'User')`. Existing terminals and applications may need to be restarted or can import the saved value with `$env:LIBPCAP_LIBDIR = [Environment]::GetEnvironmentVariable('LIBPCAP_LIBDIR', 'User')`. If Windows cannot find `wpcap.dll` at startup, install Npcap with WinPcap API compatibility or add its installed runtime directory to `PATH` before launching, for example `$env:PATH = "$env:SystemRoot\System32\Npcap;$env:PATH"`. Use the SDK library matching the Rust target architecture. The SDK location and runtime setup do not enable elevated capture privileges by themselves.
 
 ## Interface selection and permissions
 

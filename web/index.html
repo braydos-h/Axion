@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Axion — Network Traffic Intelligence</title>
+  <link rel="stylesheet" href="/style.css">
+  <script defer src="/app.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="brand-mark">A</span><div><strong>AXION</strong><span class="brand-subtitle">Network Traffic Intelligence</span></div></div>
+    <div class="status-line" aria-label="Application status">
+      <span><i class="dot" id="capture-dot"></i><span id="capture-status">Capture connecting</span></span>
+      <span><i class="dot" id="ai-dot"></i><span id="ai-status">AI connecting</span></span>
+      <span class="interface-label" id="interface-status">Interface —</span>
+    </div>
+  </header>
+  <main>
+    <div class="heading"><div><div class="eyebrow">NETWORK MONITOR</div><h1>Traffic overview</h1><p>Passive flow analysis and encrypted traffic observations.</p></div><span class="mode" id="mode">CONNECTING</span></div>
+    <div id="notice" class="notice" hidden role="status"></div>
+    <section class="metrics" aria-label="Traffic statistics">
+      <div class="metric"><span>Packets captured</span><strong id="packets-captured">—</strong></div>
+      <div class="metric"><span>Active flows</span><strong id="active-flows">—</strong></div>
+      <div class="metric"><span>Total traffic</span><strong id="total-bytes">—</strong></div>
+      <div class="metric"><span>Suspicious flows</span><strong id="suspicious-flows">—</strong></div>
+      <div class="metric"><span>AI classified</span><strong id="ai-classified">—</strong></div>
+      <div class="metric"><span>Packets / sec</span><strong id="packets-per-second">—</strong></div>
+    </section>
+    <div class="workspace">
+      <section class="panel traffic-panel">
+        <div class="panel-heading"><div><h2>Live traffic</h2><p>Observed connections <span id="flow-count"></span></p></div><div class="actions"><button id="pause" class="button" type="button">Pause updates</button><button id="clear" class="button" type="button">Clear display</button></div></div>
+        <div class="filters"><label class="search"><span class="sr-only">Search IP addresses</span><input id="search" placeholder="Search IP address" type="search"></label><label><span class="sr-only">Filter classification</span><select id="filter"><option value="all">All classifications</option><option value="unknown">Unknown</option><option value="ordinary">Ordinary TLS</option><option value="suspicious">Suspicious tunnel</option><option value="reality">Suspected VLESS / REALITY</option><option value="other">Other encrypted traffic</option></select></label></div>
+        <div class="table-wrap"><table><thead><tr><th>Time</th><th>Source</th><th>Destination</th><th>Protocol</th><th>Port</th><th>Classification</th><th>AI score</th></tr></thead><tbody id="flows"></tbody></table><div class="empty" id="empty">Waiting for observed flows.</div></div>
+      </section>
+      <aside class="panel details-panel" aria-live="polite"><div class="panel-heading"><div><h2>Flow details</h2><p>Facts and inference</p></div></div><div id="details" class="details-empty">Select a connection to inspect its metadata and analysis.</div></aside>
+    </div>
+    <section class="panel settings-panel"><div class="panel-heading"><div><h2>Application status</h2><p>Capture and cloud analysis settings</p></div></div><div class="settings"><div><label for="interface">Capture interface</label><div class="setting-row"><select id="interface"><option value="">Loading interfaces…</option></select><button type="button" id="select-interface" class="button">Select</button></div><small>Interface selection is available when capture is stopped.</small></div><div><label>Cloudflare AI analysis</label><div class="setting-row"><button type="button" id="toggle-ai" class="button">Loading…</button><span id="ai-description" class="muted"></span></div><small>Only sanitized flow metadata is shared. Model scores are not measured accuracy.</small></div><div><label>Processing drops</label><p class="drop-count" id="drops">Capture: — · Analysis: —</p><small>Events dropped from bounded processing queues.</small></div></div></section>
+    <footer>Detection only · No traffic is modified or decrypted <span>Probabilistic signals are not proof of protocol identity.</span></footer>
+  </main>
+</body>
+</html>

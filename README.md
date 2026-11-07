@@ -1,4 +1,4 @@
-# Axion
+# Axion v0.0.5
 
 Axion is a passive network traffic intelligence application written in Rust. It groups observed TCP and UDP packets into flows, extracts visible TLS ClientHello metadata, and presents local heuristics and optional Cloudflare Workers AI assessments in an embedded, local web dashboard.
 

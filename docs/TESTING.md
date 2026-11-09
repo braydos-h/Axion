@@ -38,11 +38,12 @@ sudo -E cargo test --test enforcement -- --ignored --nocapture
 | Protocol units | `src/protocols/*` | TLS SNI/ALPN/fingerprint, HTTP, WebSocket, H2/gRPC hint, DNS pointers, SOCKS4/5, VLESS/Trojan, QUIC decryption |
 | Classifier/scoring | `src/dpi`, `src/detection` | categories, noisy-OR, custom detector trait, event gating/fingerprints |
 | Rules | `src/rules` | priority, allow override, CIDR/SNI/direction, auto-block, monitor |
-| Engine/API | `src/engine`, `src/api` | multi-packet flows, bypass, auth, CSP, mode switching |
-| CLI/API E2E | `tests/cli.rs` | inspect pcap/pcapng, config round-trip, live API-only daemon, dashboard, token, status/rules CLI, hot reload, SIGTERM |
+| Engine/API | `src/engine`, `src/api` | multi-packet flows, bypass, auth, CSP, mode switching, demo endpoints |
+| Demo playback | `src/demo` | embedded fixtures, real classifier output, lifecycle, speed bounds, session limits, isolation |
+| CLI/API E2E | `tests/cli.rs` | inspect pcap/pcapng, config round-trip, live API-only daemon, dashboard, token, status/rules CLI, hot reload, `axion demo`, SIGTERM |
 | Flow E2E | `tests/flows.rs` | SYN+out-of-order TCP reassembly, SNI rule drop, reverse-direction verdict, benign TLS no-block |
 | Quality | `tests/detection_quality.rs` | precision/recall on labelled fixtures |
-| Dashboard static | `tests/web-ui.cjs` | required elements, endpoints, token header, CSP/no external assets |
+| Dashboard static | `tests/web-ui.cjs` | required elements, demo UI wiring, endpoints, token header, CSP/no external assets |
 | Privileged | `tests/live_capture.rs`, `tests/enforcement.rs` | real capture and actual NFQUEUE allow/drop |
 
 ## Fixtures

@@ -180,6 +180,15 @@ dashboard asks for the token in the browser; it is kept in `sessionStorage`.
 The token protects `/api/*`. Static dashboard files are public by design because
 navigation cannot set a bearer header; they contain no live data.
 
+### Public demo hosting
+
+Do not publish the normal `axion start` management API. For a showcase, run
+`axion demo --bind 127.0.0.1:8787` behind a TLS reverse proxy. Demo-only mode has
+no capture or enforcement and rejects production mutation routes, but visitor
+access should still be rate-limited at the proxy. See
+[DEMOS.md](DEMOS.md#public-hosting) for architecture, safety and a Caddy/nginx
+example. No hosted demo URL is maintained by this repository.
+
 ## Capacity planning
 
 - Set `general.max_flows` to roughly your peak concurrent connections plus

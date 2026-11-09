@@ -34,6 +34,7 @@ src/
 │   ├── mod.rs              inline loop and shutdown
 │   └── nfqueue.rs          netlink NFQUEUE client (no C dependency)
 ├── telemetry/              atomics, rate ring, event ring, /proc stats
+├── demo/                   isolated fixture replay, sessions, bounded ticker
 └── api/                    axum API + embedded dashboard assets
 ```
 
@@ -60,6 +61,17 @@ src/
 9. In monitor mode the verdict is recorded and every packet is accepted. In
    enforce mode with NFQUEUE, the verdict maps to `ACCEPT`/`DROP`; subsequent
    packets in a blocked flow are dropped too.
+
+## Demo replay
+
+`axion demo` runs the same binary in a separate demo-only configuration. The
+`demo` module accepts only static scenario IDs, embeds pcap/pcapng fixtures with
+`include_bytes!`, and creates a private monitor-only `Engine` per session. One
+Tokio ticker advances all sessions at their configured speed; no raw sockets,
+NFQUEUE handles, firewall calls or request-supplied filesystem paths are used.
+The API exposes session detail through bounded polling endpoints. In demo-only
+mode, production mutation routes (`/api/mode`, `/api/dry-run`,
+`/api/rules/reload`) are rejected. See [DEMOS.md](DEMOS.md).
 
 ## Concurrency and ordering
 

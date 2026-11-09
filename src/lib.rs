@@ -5,6 +5,7 @@
 pub mod api;
 pub mod capture;
 pub mod config;
+pub mod demo;
 pub mod detection;
 pub mod dpi;
 pub mod engine;

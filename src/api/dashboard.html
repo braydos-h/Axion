@@ -3,6 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
   <title>Axion DPI Console</title>
   <link rel="stylesheet" href="/dashboard.css">
 </head>
@@ -15,6 +16,10 @@
         <p class="subtitle">Rust-native deep packet inspection</p>
       </div>
     </div>
+    <nav class="view-tabs" aria-label="Dashboard sections">
+      <button id="nav-operations" class="tab active" type="button" aria-controls="view-operations" aria-selected="true">Operations</button>
+      <button id="nav-demos" class="tab" type="button" aria-controls="view-demos" aria-selected="false">Live Demos <span class="tab-dot"></span></button>
+    </nav>
     <div class="topbar-right">
       <span id="status-dot" class="dot offline" title="API status"></span>
       <span id="mode-badge" class="badge monitor">monitor</span>
@@ -30,71 +35,233 @@
   </div>
 
   <main>
-    <section class="controls">
-      <div class="control-group">
-        <span class="muted">Mode</span>
-        <button id="mode-monitor" class="btn" type="button">Monitor</button>
-        <button id="mode-enforce" class="btn" type="button">Enforce</button>
-        <button id="dry-run-btn" class="btn ghost" type="button">Dry run: off</button>
-      </div>
-      <div class="control-group">
-        <span id="backend" class="muted">backend: —</span>
-        <button id="reload-rules" class="btn ghost" type="button">Reload rules</button>
-      </div>
-    </section>
-    <p id="enforcement-note" class="note"></p>
+    <section id="view-operations" class="view">
+      <section class="controls">
+        <div class="control-group">
+          <span class="muted">Mode</span>
+          <button id="mode-monitor" class="btn" type="button">Monitor</button>
+          <button id="mode-enforce" class="btn" type="button">Enforce</button>
+          <button id="dry-run-btn" class="btn ghost" type="button">Dry run: off</button>
+        </div>
+        <div class="control-group">
+          <span id="backend" class="muted">backend: —</span>
+          <button id="reload-rules" class="btn ghost" type="button">Reload rules</button>
+          <button id="open-demos" class="btn ghost demo-link" type="button">Open live demos →</button>
+        </div>
+      </section>
+      <p id="enforcement-note" class="note"></p>
 
-    <section class="cards">
-      <article class="card"><h2>Throughput</h2><p id="stat-bps" class="value">0 bps</p><p id="stat-bps-sub" class="muted">0 bytes total</p></article>
-      <article class="card"><h2>Packets/s</h2><p id="stat-pps" class="value">0</p><p id="stat-pps-sub" class="muted">0 packets total</p></article>
-      <article class="card"><h2>Active flows</h2><p id="stat-flows" class="value">0</p><p id="stat-flows-sub" class="muted">0 events buffered</p></article>
-      <article class="card"><h2>Blocked flows</h2><p id="stat-blocked" class="value">0</p><p id="stat-blocked-sub" class="muted">0 dropped packets</p></article>
-      <article class="card"><h2>Detections</h2><p id="stat-detections" class="value">0</p><p id="stat-detections-sub" class="muted">0 rules compiled</p></article>
-      <article class="card"><h2>CPU</h2><p id="stat-cpu" class="value">0%</p><p class="muted">process average</p></article>
-      <article class="card"><h2>Memory</h2><p id="stat-mem" class="value">0 MB</p><p class="muted">RSS</p></article>
-      <article class="card"><h2>Uptime</h2><p id="stat-uptime" class="value">0s</p><p id="stat-workers" class="muted">0 workers</p></article>
-    </section>
+      <section class="cards">
+        <article class="card"><h2>Throughput</h2><p id="stat-bps" class="value">0 bps</p><p id="stat-bps-sub" class="muted">0 bytes total</p></article>
+        <article class="card"><h2>Packets/s</h2><p id="stat-pps" class="value">0</p><p id="stat-pps-sub" class="muted">0 packets total</p></article>
+        <article class="card"><h2>Active flows</h2><p id="stat-flows" class="value">0</p><p id="stat-flows-sub" class="muted">0 events buffered</p></article>
+        <article class="card"><h2>Blocked flows</h2><p id="stat-blocked" class="value">0</p><p id="stat-blocked-sub" class="muted">0 dropped packets</p></article>
+        <article class="card"><h2>Detections</h2><p id="stat-detections" class="value">0</p><p id="stat-detections-sub" class="muted">0 rules compiled</p></article>
+        <article class="card"><h2>CPU</h2><p id="stat-cpu" class="value">0%</p><p class="muted">process average</p></article>
+        <article class="card"><h2>Memory</h2><p id="stat-mem" class="value">0 MB</p><p class="muted">RSS</p></article>
+        <article class="card"><h2>Uptime</h2><p id="stat-uptime" class="value">0s</p><p id="stat-workers" class="muted">0 workers</p></article>
+      </section>
 
-    <section class="grid">
-      <article class="panel wide">
-        <div class="panel-head"><h2>Traffic rates</h2><span class="muted">recent history</span></div>
-        <canvas id="rate-chart" height="220"></canvas>
-      </article>
-      <article class="panel">
-        <div class="panel-head"><h2>Detected protocols</h2></div>
-        <div id="protocol-list" class="bars"><p class="muted">No classified flows yet.</p></div>
-      </article>
-    </section>
+      <section class="grid">
+        <article class="panel wide">
+          <div class="panel-head"><h2>Traffic rates</h2><span class="muted">recent history</span></div>
+          <canvas id="rate-chart" height="220"></canvas>
+        </article>
+        <article class="panel">
+          <div class="panel-head"><h2>Detected protocols</h2></div>
+          <div id="protocol-list" class="bars"><p class="muted">No classified flows yet.</p></div>
+        </article>
+      </section>
 
-    <section class="panel">
-      <div class="panel-head"><h2>Detection events</h2><span class="muted">newest first</span></div>
-      <div class="table-wrap">
-        <table>
-          <thead><tr><th>Time</th><th>Flow</th><th>Evidence</th><th>Confidence</th><th>Rule</th><th>Action</th></tr></thead>
-          <tbody id="events-body"><tr><td colspan="6" class="empty">Waiting for events…</td></tr></tbody>
-        </table>
-      </div>
-    </section>
-
-    <section class="grid">
-      <article class="panel wide">
-        <div class="panel-head"><h2>Recent flows</h2><span class="muted">top 100</span></div>
+      <section class="panel">
+        <div class="panel-head"><h2>Detection events</h2><span class="muted">newest first</span></div>
         <div class="table-wrap">
           <table>
-            <thead><tr><th>Flow</th><th>Protocols</th><th>SNI / DNS</th><th>Bytes</th><th>Proxy</th><th>Decision</th></tr></thead>
-            <tbody id="flows-body"><tr><td colspan="6" class="empty">No flows yet.</td></tr></tbody>
+            <thead><tr><th>Time</th><th>Flow</th><th>Evidence</th><th>Confidence</th><th>Rule</th><th>Action</th></tr></thead>
+            <tbody id="events-body"><tr><td colspan="6" class="empty">Waiting for events…</td></tr></tbody>
           </table>
         </div>
-      </article>
-      <article class="panel">
-        <div class="panel-head"><h2>Rules</h2><span id="rule-summary" class="muted"></span></div>
-        <div id="rules-list" class="rules"><p class="muted">Loading…</p></div>
-      </article>
+      </section>
+
+      <section class="grid">
+        <article class="panel wide">
+          <div class="panel-head"><h2>Recent flows</h2><span class="muted">top 100</span></div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Flow</th><th>Protocols</th><th>SNI / DNS</th><th>Bytes</th><th>Proxy</th><th>Decision</th></tr></thead>
+              <tbody id="flows-body"><tr><td colspan="6" class="empty">No flows yet.</td></tr></tbody>
+            </table>
+          </div>
+        </article>
+        <article class="panel">
+          <div class="panel-head"><h2>Rules</h2><span id="rule-summary" class="muted"></span></div>
+          <div id="rules-list" class="rules"><p class="muted">Loading…</p></div>
+        </article>
+      </section>
+    </section>
+
+    <section id="view-demos" class="view hidden">
+      <div class="demo-ribbon">
+        <span class="demo-tag">DEMO DATA</span>
+        <p>Every figure below is produced by replaying embedded deterministic pcap fixtures through a private Axion engine. This is not live network traffic.</p>
+        <span id="demo-public-note" class="demo-public-note"></span>
+      </div>
+
+      <div class="demo-hero">
+        <div>
+          <p class="eyebrow">Interactive laboratory</p>
+          <h2>Live demos</h2>
+          <p class="demo-lede">Select a scenario and watch real parsing, flow tracking, DPI classification, confidence scoring and rule evaluation update as packets are replayed. Nothing here touches production capture or enforcement.</p>
+        </div>
+        <div class="isolation-badges">
+          <span class="pill ok">no root</span>
+          <span class="pill ok">no capture</span>
+          <span class="pill ok">no NFQUEUE</span>
+          <span class="pill ok">no firewall changes</span>
+          <span class="pill ok">no external network</span>
+        </div>
+      </div>
+
+      <div class="panel demo-scenario-panel">
+        <div class="panel-head">
+          <div>
+            <h2>Choose a demonstration</h2>
+            <p class="muted">Seven deterministic scenarios share the same real analysis pipeline.</p>
+          </div>
+          <span class="muted" id="demo-scenario-count"></span>
+        </div>
+        <div id="demo-scenario-grid" class="scenario-grid" aria-live="polite">
+          <p class="muted">Loading scenarios…</p>
+        </div>
+      </div>
+
+      <div class="panel demo-runner">
+        <div class="runner-head">
+          <div class="runner-title">
+            <div>
+              <h2 id="demo-runner-title">Select a scenario</h2>
+              <p id="demo-runner-sub" class="muted">Pick one of the demonstrations above, then start playback.</p>
+            </div>
+            <span id="demo-state-badge" class="badge demo-state idle">idle</span>
+          </div>
+          <div class="runner-controls">
+            <label class="speed-label" for="demo-speed">Speed</label>
+            <select id="demo-speed" class="select" aria-label="Playback speed">
+              <option value="0.5">0.5×</option>
+              <option value="1" selected>1×</option>
+              <option value="2">2×</option>
+              <option value="4">4×</option>
+              <option value="8">8×</option>
+            </select>
+            <button id="demo-start" class="btn primary" type="button">Start demo</button>
+            <button id="demo-pause" class="btn" type="button" disabled>Pause</button>
+            <button id="demo-resume" class="btn" type="button" disabled>Resume</button>
+            <button id="demo-reset" class="btn ghost" type="button" disabled>Reset</button>
+            <button id="demo-stop" class="btn danger" type="button" disabled>Stop</button>
+          </div>
+        </div>
+        <div class="progress-wrap">
+          <div class="progress-track"><div id="demo-progress-bar" class="progress-fill" style="width:0%"></div></div>
+          <span id="demo-progress-text" class="mono">No session</span>
+        </div>
+        <div class="session-strip">
+          <span class="muted">Sessions</span>
+          <div id="demo-session-list" class="session-list">
+            <span class="muted">No playback sessions yet.</span>
+          </div>
+        </div>
+        <p id="demo-session-note" class="demo-session-note">Playback runs in passive monitor mode. Drop verdicts are simulated and never affect real packets.</p>
+      </div>
+
+      <div class="demo-layout">
+        <article class="panel demo-info">
+          <div class="panel-head"><h2 id="demo-info-title">Scenario details</h2><span id="demo-info-number" class="muted"></span></div>
+          <p id="demo-info-tagline" class="demo-tagline"></p>
+          <p id="demo-info-description" class="demo-description"></p>
+          <div class="info-grid">
+            <div>
+              <h3>What you are seeing</h3>
+              <ul id="demo-info-focus" class="detail-list"></ul>
+            </div>
+            <div>
+              <h3>Expected real output</h3>
+              <ul id="demo-info-expected" class="detail-list check-list"></ul>
+            </div>
+          </div>
+          <div class="caveat-box">
+            <h3>Limits and honesty notes</h3>
+            <ul id="demo-info-caveats" class="detail-list caveat-list"></ul>
+          </div>
+          <div class="fixture-line">
+            <span class="muted">Fixtures:</span>
+            <span id="demo-info-fixtures" class="mono"></span>
+          </div>
+        </article>
+
+        <section class="demo-stats cards">
+          <article class="card demo-card"><h2>Frames processed</h2><p id="demo-stat-frames" class="value">0</p><p class="muted">replayed through the engine</p></article>
+          <article class="card demo-card"><h2>Packets</h2><p id="demo-stat-packets" class="value">0</p><p id="demo-stat-bytes" class="muted">0 bytes</p></article>
+          <article class="card demo-card"><h2>Active flows</h2><p id="demo-stat-flows" class="value">0</p><p class="muted">bounded flow table</p></article>
+          <article class="card demo-card"><h2>Detection events</h2><p id="demo-stat-detections" class="value">0</p><p class="muted">Deduplicated per flow</p></article>
+          <article class="card demo-card"><h2>Simulated drops</h2><p id="demo-stat-drops" class="value">0</p><p class="muted">verdicts shown, never enforced</p></article>
+          <article class="card demo-card"><h2>Progress</h2><p id="demo-stat-progress" class="value">0%</p><p class="muted">deterministic timeline</p></article>
+        </section>
+      </div>
+
+      <div class="grid demo-charts">
+        <article class="panel wide">
+          <div class="panel-head"><h2>Live traffic rates</h2><span class="muted">measured from the demo engine</span></div>
+          <canvas id="demo-rate-chart" height="240"></canvas>
+          <div class="chart-legend"><span class="legend-throughput">throughput</span><span class="legend-packets">packets/s</span></div>
+        </article>
+        <article class="panel">
+          <div class="panel-head"><h2>Protocol distribution</h2><span class="muted">classifier findings</span></div>
+          <div id="demo-protocol-list" class="bars"><p class="muted">No classifications yet.</p></div>
+        </article>
+      </div>
+
+      <section class="panel">
+        <div class="panel-head"><h2>Flow activity</h2><span class="muted">source → destination, parsed metadata and policy verdict</span></div>
+        <div class="table-wrap">
+          <table class="wide-table">
+            <thead><tr><th>Flow</th><th>Protocols</th><th>Extracted metadata</th><th>Packets / bytes</th><th>Confidence</th><th>Decision</th></tr></thead>
+            <tbody id="demo-flows-body"><tr><td colspan="6" class="empty">Start a demo to inspect flows.</td></tr></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head"><h2>Detection events</h2><span class="muted">actual classifier output, confidence and rule evaluation</span></div>
+        <div class="table-wrap">
+          <table class="wide-table">
+            <thead><tr><th>Time</th><th>Endpoints</th><th>Classification</th><th>Evidence</th><th>Confidence</th><th>Rule / decision</th></tr></thead>
+            <tbody id="demo-events-body"><tr><td colspan="6" class="empty">Start a demo to inspect detection events.</td></tr></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="panel demo-explainer">
+        <div class="panel-head"><h2>Passive monitoring vs. enforcement</h2></div>
+        <div class="explain-grid">
+          <div>
+            <h3>What this demo shows</h3>
+            <p>Axion evaluates every rule and records the resulting ALLOW, LOG, MONITOR, DROP or REJECT verdict. The event stream and flow table show the real classifier output and the real matched rule.</p>
+          </div>
+          <div>
+            <h3>What is intentionally different</h3>
+            <p>This server runs without capture privileges and without NFQUEUE. Drop/REJECT verdicts stop at the policy layer: <strong>no packet is discarded</strong>. Only an inline NFQUEUE deployment can enforce them on a host.</p>
+          </div>
+          <div>
+            <h3>No decryption claims</h3>
+            <p>TLS application data, TLS-wrapped VLESS/Trojan, REALITY and VMess remain encrypted. Axion classifies only observable metadata and plaintext headers. The VLESS/Trojan demos use fixtures whose headers are visible.</p>
+          </div>
+        </div>
+      </section>
     </section>
 
     <footer>
       <p>Axion performs passive inspection unless an NFQUEUE backend is active. Encrypted payloads are classified only from observable metadata.</p>
-      <p>Management API binds to localhost by default. Use a token for any non-loopback deployment.</p>
+      <p>Demo replay uses isolated monitor-only engines with embedded fixtures. Management API binds to localhost by default.</p>
     </footer>
   </main>
   <script src="/dashboard.js"></script>

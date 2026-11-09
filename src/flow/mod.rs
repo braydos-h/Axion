@@ -2,6 +2,7 @@
 
 pub mod reassembly;
 
+use std::collections::BTreeMap;
 use std::net::IpAddr;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -336,6 +337,19 @@ impl FlowState {
             tls_ja3: analysis
                 .and_then(|a| a.tls.as_ref())
                 .and_then(|t| t.ja3_hash.clone()),
+            tls_version: analysis.and_then(|a| a.tls_version.clone()),
+            tls_cipher_count: analysis.map(|a| a.tls_cipher_count).unwrap_or(0),
+            tls_extension_count: analysis.map(|a| a.tls_extension_count).unwrap_or(0),
+            tls_grease_count: analysis.map(|a| a.tls_grease_count).unwrap_or(0),
+            tls_ech_present: analysis.map(|a| a.tls_ech_present).unwrap_or(false),
+            http_method: analysis.and_then(|a| a.http_method.clone()),
+            http_host: analysis.and_then(|a| a.http_host.clone()),
+            http_target: analysis.and_then(|a| a.http_target.clone()),
+            dns_qtype: analysis.and_then(|a| a.dns_qtype.clone()),
+            categories: analysis
+                .map(|a| a.category_scores.clone())
+                .unwrap_or_default(),
+            evidence: analysis.map(|a| a.evidence.clone()).unwrap_or_default(),
             action: decision
                 .map(|d| d.action.to_string())
                 .unwrap_or_else(|| "allow".to_string()),
@@ -384,6 +398,17 @@ pub struct FlowSnapshot {
     pub alpn: Vec<String>,
     pub dns_names: Vec<String>,
     pub tls_ja3: Option<String>,
+    pub tls_version: Option<String>,
+    pub tls_cipher_count: usize,
+    pub tls_extension_count: usize,
+    pub tls_grease_count: usize,
+    pub tls_ech_present: bool,
+    pub http_method: Option<String>,
+    pub http_host: Option<String>,
+    pub http_target: Option<String>,
+    pub dns_qtype: Option<String>,
+    pub categories: BTreeMap<String, f32>,
+    pub evidence: Vec<String>,
     pub action: String,
     pub matched_rule: Option<String>,
     pub blocked: bool,

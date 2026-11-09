@@ -20,6 +20,59 @@ or runtime dependencies.
 > Axion only exposes low-confidence heuristics for it and never auto-blocks on
 > those heuristics alone. See [docs/DETECTION.md](docs/DETECTION.md).
 
+## Live Demos
+
+Axion ships with an interactive, isolated demonstration mode. One command
+replays embedded deterministic pcap/pcapng fixtures through the **real** Axion
+parser, flow tracker, DPI classifier, confidence scoring and rule engine, then
+streams live results to the embedded dashboard.
+
+![Axion Live Demos dashboard preview](docs/assets/live-demos-preview.svg)
+
+*Illustrative preview. All dashboard values are computed at runtime from the
+fixture replay; the image is not a substitute for running the demo.*
+
+```bash
+cargo build --release
+./target/release/axion demo
+# or: cargo run --release -- demo
+```
+
+Open <http://127.0.0.1:8787/>. No root, capture capability, NFQUEUE, firewall
+rule, external service or network access is required. `axion demo` forces a
+fresh monitor-only runtime, disables production management mutations and never
+touches the host firewall.
+
+| # | Demonstration | What the real pipeline shows |
+|---|---|---|
+| 1 | Normal HTTPS Traffic | TLS 1.3 ClientHello parsing, SNI `www.example.com`, ALPN `h2`/`http/1.1`, cipher/extension counts, JA3-style fingerprint, allow verdict and why TLS alone is not malicious. Uses the pcapng fixture. |
+| 2 | SOCKS5 Proxy Detection | Complete SOCKS5 connect request, extracted target `example.com:443`, 0.97 proxy confidence and the resulting drop verdict. |
+| 3 | HTTP CONNECT Detection | CONNECT request-line/header parsing, target extraction, 0.97 proxy finding and simulated drop. |
+| 4 | VLESS and Trojan Detection | Field-validated plaintext VLESS and Trojan headers, two proxy detections, and explicit reminders that TLS-wrapped variants are not decrypted. |
+| 5 | DNS and HTTP Inspection | DNS question `www.example.com A` plus HTTP method/host/target metadata, surfaced through real monitor rules. |
+| 6 | Traffic Enforcement | Explicit ALLOW, MONITOR, LOG and DROP rule evaluation, including the real matched rule for each flow. Drop verdicts are simulated. |
+| 7 | Mixed Traffic Simulation | All fixture families interleaved, including out-of-order IPv4 fragments, with live charts, protocol distribution, flows and detection events. |
+
+Every chart point is a sampled counter from the demo engine. There are no
+hardcoded measurements, no fabricated detections and no claim that encrypted
+payloads are inspected. Demo engines are private, monitor-only and bounded
+(concurrent sessions, frames, event ring, rate history and session TTL). See
+[docs/DEMOS.md](docs/DEMOS.md) for architecture, API, security boundaries and
+public-hosting instructions.
+
+Public hosting is supported only through the demo-only runtime:
+
+```bash
+# Bind only on a trusted reverse proxy interface, never expose `axion start`.
+./target/release/axion --config config/axion.demo.example.toml demo --bind 127.0.0.1:8787
+```
+
+`axion demo` permits a public bind because it disables production mutation
+endpoints, while retaining optional bearer authentication and all security
+headers. Terminate TLS and add rate limiting at your reverse proxy.
+**This repository does not maintain a hosted demo URL.** The link above is a
+local address; do not assume a public instance exists.
+
 ## What works
 
 - Linux AF_PACKET live capture with `recvmmsg` batching and a bounded worker pool.
@@ -41,6 +94,9 @@ or runtime dependencies.
   dry-run mode, runtime monitor/enforce switching and management bypasses.
 - Embedded dashboard at `127.0.0.1:8787` (no external assets), optional bearer
   token, CSP/security headers and a small management API.
+- Interactive Live Demos with embedded pcap/pcapng fixtures, isolated
+  monitor-only engines, real DPI/rule output, playback controls and a public
+  demo-only runtime.
 - Hot rule reload via SIGHUP or `POST /api/rules/reload` with validation; invalid
   reloads keep the previous policy.
 - Deterministic fixtures, unit/integration/quality tests, Criterion benchmarks,
@@ -91,6 +147,8 @@ axion rules list
 axion rules reload
 axion rules validate
 axion inspect --pcap sample.pcap
+axion demo                                   # isolated, no root, no capture
+axion demo --bind 127.0.0.1:9000             # custom demo dashboard port
 axion config example
 axion config check
 ```
@@ -224,6 +282,24 @@ POST /api/mode            {"mode":"monitor"|"enforce"}
 POST /api/dry-run         {"enabled":true|false}
 ```
 
+Live Demo endpoints (safe against embedded fixtures only; no paths/uploads):
+
+```text
+GET    /api/demo/scenarios
+GET    /api/demo/status
+GET    /api/demo/sessions
+POST   /api/demo/sessions                       {"scenario_id":"...","speed":1.0}
+GET    /api/demo/sessions/{id}
+GET    /api/demo/sessions/{id}/flows?limit=N
+GET    /api/demo/sessions/{id}/events?limit=N
+POST   /api/demo/sessions/{id}/pause
+POST   /api/demo/sessions/{id}/resume
+POST   /api/demo/sessions/{id}/reset
+POST   /api/demo/sessions/{id}/speed            {"speed":0.25..8.0}
+DELETE /api/demo/sessions/{id}                  stop and release the session
+POST   /api/demo/sessions/{id}/stop             alias for stopping a session
+```
+
 Security defaults: localhost bind, optional bearer token, JSON body limit, no
 CORS, CSP, `X-Frame-Options: DENY`, `nosniff`, no external dashboard assets.
 Static assets are public; all `/api/*` data endpoints require the token when one
@@ -276,8 +352,10 @@ sudo -E cargo test --test enforcement -- --ignored --nocapture
 
 Fixtures are deterministic and generated by `scripts/make-fixtures.py`; they are
 committed under `tests/fixtures/`. The quality test measures precision/recall on
-the eight labelled fixtures. Synthetic fixtures are useful regression guards,
-not evidence of Internet-wide accuracy.
+the eight labelled fixtures. The demo tests replay the same fixtures through
+isolated engines and assert real classifier output, lifecycle controls, session
+limits, authentication and demo-only guards. Synthetic fixtures are useful
+regression guards, not evidence of Internet-wide accuracy.
 
 ### Measured locally
 
@@ -332,6 +410,7 @@ claimed as detected.
 
 ## Documentation
 
+- [docs/DEMOS.md](docs/DEMOS.md) — Live Demo architecture, API, security and hosting.
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — modules, buffering, concurrency.
 - [docs/DETECTION.md](docs/DETECTION.md) — each detector, evidence, scoring, limits.
 - [docs/RULES.md](docs/RULES.md) — complete rule schema and precedence.

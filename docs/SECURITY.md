@@ -64,6 +64,10 @@ and unauthorized policy changes.
   atomic swap; invalid files leave the previous policy in place.
 - No remote rule editing endpoint; the dashboard views and triggers reload of the
   operator-managed file.
+- Live Demo endpoints accept only a static scenario ID and numeric speed. They
+  never accept paths or uploads, use no external commands, and create private
+  monitor-only engines. `axion demo` additionally rejects `/api/mode`,
+  `/api/dry-run` and `/api/rules/reload`. See [DEMOS.md](DEMOS.md).
 
 ## Detection limits as security boundaries
 

@@ -1,0 +1,53 @@
+# Axion demo-only configuration.
+#
+# `axion demo` sanitises the runtime regardless of this file: capture is
+# disabled, mode is forced to monitor, and production management mutations are
+# rejected. This file is useful for choosing the API bind address or a bearer
+# token when the demo is placed behind a reverse proxy.
+#
+# No section here can enable NFQUEUE, raw capture or firewall changes.
+
+rules = []
+
+[general]
+mode = "monitor"
+dry_run = true
+max_flows = 512
+flow_idle_timeout_seconds = 300
+event_capacity = 512
+auto_block_confidence = 0.92
+monitor_confidence = 0.50
+log_level = "info"
+
+[capture]
+backend = "none"
+interface = "lo"
+
+[api]
+enabled = true
+# Loopback by default. For a public deployment bind only behind a trusted
+# reverse proxy, for example 127.0.0.1:8787, and terminate TLS there.
+bind = "127.0.0.1:8787"
+# Optional: set a bearer token if the demo is not intentionally public.
+# token = "change-me"
+# Demo-only mode deliberately allows a public bind because production
+# management routes are disabled. Prefer a reverse proxy and rate limiting.
+allow_insecure_remote = true
+request_body_limit = 65536
+
+[telemetry]
+sample_interval_ms = 1000
+history_seconds = 120
+log_detections = false
+
+[detection]
+enabled = true
+enable_quic_initial = true
+enable_tls_fingerprint = true
+enable_heuristics = true
+
+[policy]
+default_action = "allow"
+allow_overrides = true
+allowlist_cidrs = []
+blocklist_cidrs = []

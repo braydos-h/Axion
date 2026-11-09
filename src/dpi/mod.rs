@@ -50,6 +50,18 @@ pub struct FlowAnalysis {
     pub sni: Option<String>,
     pub alpn: Vec<String>,
     pub dns_names: Vec<String>,
+    /// Compact TLS metadata retained after parser state is dropped.
+    pub tls_version: Option<String>,
+    pub tls_cipher_count: usize,
+    pub tls_extension_count: usize,
+    pub tls_grease_count: usize,
+    pub tls_ech_present: bool,
+    /// Compact HTTP metadata retained for dashboards and offline reports.
+    pub http_method: Option<String>,
+    pub http_host: Option<String>,
+    pub http_target: Option<String>,
+    /// DNS question type name (`A`, `AAAA`, ...).
+    pub dns_qtype: Option<String>,
     pub tls: Option<TlsInfo>,
     pub http: Option<HttpInfo>,
     pub http2: Option<Http2Info>,
@@ -186,6 +198,11 @@ pub fn analyze(input: AnalysisInput<'_>, config: &DetectionConfig) -> FlowAnalys
         out.incomplete |= info.truncated;
         out.sni = info.sni.clone();
         out.alpn = info.alpn.clone();
+        out.tls_version = Some(crate::protocols::tls::tls_version_name(version).to_string());
+        out.tls_cipher_count = info.cipher_suites.len();
+        out.tls_extension_count = info.extensions.len();
+        out.tls_grease_count = info.grease_count;
+        out.tls_ech_present = info.ech_present;
         if info.ech_present {
             out.evidence
                 .push("TLS Encrypted ClientHello extension present".to_string());
@@ -217,6 +234,11 @@ pub fn analyze(input: AnalysisInput<'_>, config: &DetectionConfig) -> FlowAnalys
         );
         out.incomplete |= info.truncated;
         out.alpn = info.alpn.clone();
+        out.tls_version = Some(crate::protocols::tls::tls_version_name(version).to_string());
+        out.tls_cipher_count = info.cipher_suites.len();
+        out.tls_extension_count = info.extensions.len();
+        out.tls_grease_count = info.grease_count;
+        out.tls_ech_present = info.ech_present;
         let mut stored = info;
         if !config.enable_tls_fingerprint {
             stored.ja3 = None;
@@ -244,6 +266,9 @@ pub fn analyze(input: AnalysisInput<'_>, config: &DetectionConfig) -> FlowAnalys
     }
     if let Some(info) = http_info {
         out.incomplete |= info.truncated;
+        out.http_method = info.method.clone();
+        out.http_host = info.host.clone();
+        out.http_target = info.target.clone();
         let confidence = if info.is_request { 0.97 } else { 0.90 };
         let target = info.target.clone().unwrap_or_default();
         let evidence = if info.is_request {
@@ -365,6 +390,10 @@ pub fn analyze(input: AnalysisInput<'_>, config: &DetectionConfig) -> FlowAnalys
         );
         out.dns_names = dns.questions.iter().map(|q| q.name.clone()).collect();
         out.dns_names.extend(dns.answers.iter().cloned());
+        out.dns_qtype = dns
+            .questions
+            .first()
+            .map(|q| dns_type_name(q.qtype).to_string());
         out.dns = Some(dns);
     }
 

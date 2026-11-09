@@ -15,6 +15,7 @@ use tracing_subscriber::EnvFilter;
 use axion::api;
 use axion::capture::CapturePipeline;
 use axion::config::{Config, Mode, EXAMPLE_CONFIG};
+use axion::demo::DemoManager;
 use axion::engine::Engine;
 use axion::firewall::{self, nfqueue::NfQueue};
 use axion::packet::PcapReader;
@@ -54,6 +55,8 @@ enum Command {
     },
     /// Analyze a pcap/pcapng file offline
     Inspect(InspectArgs),
+    /// Start an isolated, unprivileged live demo server
+    Demo(DemoArgs),
     /// Print or check configuration
     Config {
         #[command(subcommand)]
@@ -128,6 +131,19 @@ struct InspectArgs {
     limit: usize,
 }
 
+#[derive(clap::Args)]
+struct DemoArgs {
+    /// Address for the demo dashboard/API (defaults to api.bind)
+    #[arg(long, value_name = "ADDR")]
+    bind: Option<SocketAddr>,
+    /// Optional request token (demo controls are still isolated either way)
+    #[arg(long, env = "AXION_DEMO_TOKEN")]
+    token: Option<String>,
+    /// Maximum concurrent playback sessions
+    #[arg(long, default_value_t = 4)]
+    max_sessions: usize,
+}
+
 #[derive(Subcommand)]
 enum ConfigCommand {
     /// Print the documented example configuration
@@ -165,6 +181,17 @@ async fn main() -> Result<()> {
             let config = load_config(&path)?;
             init_logging("warn", cli.verbose);
             run_inspect(args, config, path)
+        }
+        Command::Demo(args) => {
+            // Do not pick up an ambient production config implicitly. Demo mode
+            // uses built-in safe defaults unless the operator names a config.
+            let config = if cli.config.is_some() {
+                load_config(&path)?
+            } else {
+                Config::default()
+            };
+            init_logging("info", cli.verbose);
+            run_demo(args, config).await
         }
         Command::Config { command } => {
             init_logging("warn", cli.verbose);
@@ -340,10 +367,17 @@ async fn run_start(args: StartArgs, mut config: Config, path: PathBuf) -> Result
 
     let (api_shutdown, api_rx) = tokio::sync::oneshot::channel();
     let api_handle = if config.api.enabled {
+        let demo_manager = DemoManager::new(4);
         Some(
-            api::serve(Arc::clone(&engine), &config.api, api_rx)
-                .await
-                .with_context(|| format!("start management API on {}", config.api.bind))?,
+            api::serve_with_demo(
+                Arc::clone(&engine),
+                &config.api,
+                Some(demo_manager),
+                false,
+                api_rx,
+            )
+            .await
+            .with_context(|| format!("start management API on {}", config.api.bind))?,
         )
     } else {
         drop(api_rx);
@@ -469,6 +503,98 @@ fn backend_from_source(source: &str) -> &'static str {
     } else {
         "unknown"
     }
+}
+
+async fn run_demo(args: DemoArgs, mut config: Config) -> Result<()> {
+    // Demo mode deliberately uses a fresh, monitor-only runtime. Capture
+    // settings, rules and policy state from an operator config are not reused.
+    config.general.mode = Mode::Monitor;
+    config.general.dry_run = true;
+    config.capture.backend = axion::config::CaptureBackend::None;
+    config.capture.pcap_file = None;
+    config.rules.clear();
+    config.policy.allowlist_cidrs.clear();
+    config.policy.blocklist_cidrs.clear();
+    config.policy.default_action = axion::config::Action::Allow;
+    config.telemetry.log_detections = false;
+    config.api.enabled = true;
+    config.api.allow_insecure_remote = true;
+    if let Some(bind) = args.bind {
+        config.api.bind = bind;
+    }
+    if let Some(token) = args.token {
+        config.api.token = Some(token);
+    }
+    if config.api.token.is_none() {
+        if let Ok(token) = std::env::var("AXION_API_TOKEN") {
+            if !token.is_empty() {
+                config.api.token = Some(token);
+            }
+        }
+    }
+    if config.api.token.as_deref() == Some("") {
+        config.api.token = None;
+    }
+    config.validate()?;
+
+    let config = Arc::new(config);
+    let telemetry = Arc::new(Telemetry::new(60, 1000, 64));
+    let rules = RuleStore::new(PathBuf::from("<demo-server>"), &config)?;
+    let engine = Engine::new(Arc::clone(&config), rules, telemetry, false, "demo-server")?;
+    engine.set_capture_info("demo:no-capture", 0);
+    let manager = DemoManager::new(args.max_sessions);
+    let max_sessions = manager.max_sessions();
+    let (shutdown, shutdown_rx) = tokio::sync::oneshot::channel();
+    let handle = api::serve_with_demo(
+        Arc::clone(&engine),
+        &config.api,
+        Some(manager),
+        true,
+        shutdown_rx,
+    )
+    .await
+    .with_context(|| format!("start demo API on {}", config.api.bind))?;
+
+    let shown = api_addr(&config, Some(handle.addr));
+    println!();
+    println!("  AXION LIVE DEMOS");
+    println!("  Dashboard: http://{shown}/");
+    println!("  Mode:      demo-only, isolated, no capture, no enforcement");
+    println!("  Sessions:  up to {max_sessions} concurrent, isolated per browser demo");
+    println!("  Data:      embedded deterministic pcap fixtures");
+    println!("  Safety:    no root, no NFQUEUE, no firewall changes, no external network");
+    println!("  Stop:      Ctrl-C");
+    println!();
+    if !handle.addr.ip().is_loopback() {
+        if config.api.token.is_some() {
+            println!("  Note: a management token is required for API access.");
+        } else {
+            println!(
+                "  Note: bound to a non-loopback address. Production management is disabled; \
+                 place a TLS reverse proxy and rate limiting in front of this demo server."
+            );
+        }
+    }
+
+    let ctrl_c = tokio::signal::ctrl_c();
+    tokio::pin!(ctrl_c);
+    #[cfg(unix)]
+    {
+        let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+        tokio::select! {
+            _ = &mut ctrl_c => {},
+            _ = term.recv() => {},
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        ctrl_c.await?;
+    }
+
+    println!("Stopping demo server and releasing playback sessions…");
+    let _ = shutdown.send(());
+    handle.wait().await;
+    Ok(())
 }
 
 fn run_status(args: StatusArgs, path: &Path) -> Result<()> {

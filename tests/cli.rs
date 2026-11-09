@@ -318,6 +318,128 @@ src_cidrs = ["not-a-cidr"]
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+#[test]
+fn demo_example_config_is_valid() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("config")
+        .join("axion.demo.example.toml");
+    let output = run(&["--config", path.to_str().unwrap(), "config", "check"]);
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn demo_command_serves_isolated_playback_without_privileges() {
+    let port = free_port();
+    let demo_config = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("config")
+        .join("axion.demo.example.toml");
+    let mut child = ChildGuard(
+        Command::new(bin())
+            .arg("--config")
+            .arg(&demo_config)
+            .arg("demo")
+            .arg("--bind")
+            .arg(format!("127.0.0.1:{port}"))
+            .arg("--max-sessions")
+            .arg("2")
+            .env_remove("AXION_API_TOKEN")
+            .env_remove("AXION_DEMO_TOKEN")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn axion demo"),
+    );
+
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let mut ready = false;
+    while Instant::now() < deadline {
+        if let Some(status) = child.0.try_wait().unwrap() {
+            panic!("axion demo exited early with {status}");
+        }
+        if let Ok((status, _)) = try_http_request(port, "GET", "/api/health", None, None) {
+            if status == 200 {
+                ready = true;
+                break;
+            }
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    assert!(ready, "demo API did not become ready");
+
+    let (status, dashboard) = http_request(port, "GET", "/", None, None);
+    assert_eq!(status, 200);
+    assert!(dashboard.contains("Live Demos"));
+    assert!(dashboard.contains("DEMO DATA"));
+
+    let (status, body) = http_request(port, "GET", "/api/demo/scenarios", None, None);
+    assert_eq!(status, 200);
+    let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(json["scenarios"].as_array().unwrap().len(), 7);
+    assert_eq!(json["isolation"]["real_capture"], false);
+
+    let (status, body) = http_request(
+        port,
+        "POST",
+        "/api/demo/sessions",
+        None,
+        Some(r#"{"scenario_id":"socks5-proxy","speed":2.0}"#),
+    );
+    assert_eq!(status, 201);
+    let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let id = json["id"].as_str().unwrap().to_string();
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut completed = false;
+    while Instant::now() < deadline {
+        let (status, body) = http_request(
+            port,
+            "GET",
+            &format!("/api/demo/sessions/{id}/status"),
+            None,
+            None,
+        );
+        assert_eq!(status, 200);
+        let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+        if json["state"] == "completed" {
+            assert_eq!(json["flows"][0]["detected_protocols"][0], "socks5");
+            assert_eq!(json["flows"][0]["action"], "drop");
+            assert_eq!(json["flows"][0]["blocked"], false);
+            assert_eq!(
+                json["events"][0]["matched_rule"],
+                "builtin:auto-block-proxy"
+            );
+            assert_eq!(json["enforcement"]["can_enforce"], false);
+            completed = true;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    assert!(completed, "demo playback did not complete");
+
+    let (status, _) = http_request(
+        port,
+        "POST",
+        "/api/mode",
+        None,
+        Some(r#"{"mode":"enforce"}"#),
+    );
+    assert_eq!(
+        status, 403,
+        "demo-only mode must disable production controls"
+    );
+
+    let (status, body) = http_request(port, "GET", "/api/status", None, None);
+    assert_eq!(status, 200);
+    let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(json["demo_only"], true);
+    assert_eq!(json["enforcement_active"], false);
+    assert_eq!(json["capture_source"], "demo:no-capture");
+}
+
 fn base_api_config(port: u16) -> String {
     format!(
         r#"

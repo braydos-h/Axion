@@ -1,0 +1,6 @@
+[submodule "REALITY"]
+	path = REALITY
+	url = https://github.com/XTLS/REALITY.git
+[submodule "Xray-core"]
+	path = Xray-core
+	url = https://github.com/XTLS/Xray-core.git

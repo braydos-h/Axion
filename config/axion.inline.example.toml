@@ -1,0 +1,63 @@
+# Inline NFQUEUE example. Install queue rules first:
+#   sudo scripts/install-nfqueue.sh fail-open 0
+#   sudo axion --config /etc/axion/axion.inline.toml start
+#
+# This configuration is monitor/fail-safe by default (`dry_run = true`). Set
+# dry_run = false and optionally mode = "enforce" after validating policy.
+
+[general]
+mode = "enforce"
+dry_run = true
+worker_threads = 0
+max_flows = 50000
+flow_idle_timeout_seconds = 120
+max_reassembly_bytes = 65536
+auto_block_confidence = 0.92
+monitor_confidence = 0.50
+
+[capture]
+# NFQUEUE is the packet source; the capture backend is not used inline.
+backend = "none"
+
+[api]
+enabled = true
+bind = "127.0.0.1:8787"
+# token = "change-me"
+allow_insecure_remote = false
+
+[telemetry]
+sample_interval_ms = 500
+history_seconds = 120
+log_detections = true
+
+[firewall]
+queue_num = 0
+queue_max_len = 2048
+batch_size = 64
+fail_open = true
+bypass_tcp_ports = [22, 8787]
+bypass_cidrs = ["127.0.0.0/8", "::1/128"]
+
+[detection]
+enabled = true
+enable_quic_initial = true
+enable_tls_fingerprint = true
+enable_heuristics = true
+
+[policy]
+default_action = "allow"
+allow_overrides = true
+allowlist_cidrs = []
+blocklist_cidrs = []
+
+[[rules]]
+name = "drop-decoded-proxies"
+description = "Decoded plaintext proxy handshakes only; no TLS mimicry."
+enabled = true
+priority = 500
+action = "drop"
+log = true
+
+[rules.match]
+protocols = ["socks4", "socks5", "http-connect", "xray-vless", "trojan-plaintext"]
+min_confidence = 0.9

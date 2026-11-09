@@ -1,0 +1,110 @@
+# Axion sample configuration.
+# Copy to /etc/axion/axion.toml and adjust. Unknown keys are rejected.
+
+[general]
+# monitor = passive analysis; enforce = inline verdicts through NFQUEUE.
+mode = "monitor"
+dry_run = false
+# 0 = one worker per CPU (capped at 8).
+worker_threads = 0
+max_flows = 100000
+flow_idle_timeout_seconds = 120
+fragment_timeout_seconds = 30
+max_fragment_sets = 4096
+max_fragment_bytes = 16777216
+max_reassembly_bytes = 262144
+event_capacity = 4096
+# Automatic blocking is only applied in enforce mode and only to direct proxy
+# evidence (decoded SOCKS/CONNECT/plaintext VLESS/Trojan), never to weak TLS
+# mimicry heuristics. Set to 1.0 to disable automatic blocking.
+auto_block_confidence = 0.92
+monitor_confidence = 0.50
+log_level = "info"
+
+[capture]
+# auto | af_packet | libpcap | none
+backend = "auto"
+interface = "eth0"
+# 2048 bytes covers normal Ethernet frames; raise for jumbo/truncated captures.
+snaplen = 2048
+buffer_bytes = 8388608
+batch_size = 64
+# Bounded capture-to-worker queue; full queues drop frames and are counted.
+queue_capacity = 2048
+promiscuous = true
+include_outgoing = true
+
+[api]
+enabled = true
+bind = "127.0.0.1:8787"
+# Optional bearer token. Required for non-loopback bind unless explicitly
+# allowed below. AXION_API_TOKEN overrides this value.
+# token = "change-me"
+allow_insecure_remote = false
+request_body_limit = 65536
+
+[telemetry]
+sample_interval_ms = 1000
+history_seconds = 120
+log_detections = true
+
+[firewall]
+queue_num = 0
+queue_max_len = 1024
+batch_size = 64
+# Mirrors NFQA_CFG_F_FAIL_OPEN. fail-closed deployments should set false and
+# must ensure the queue is always serviced.
+fail_open = true
+bypass_tcp_ports = [22, 8787]
+bypass_cidrs = ["127.0.0.0/8", "::1/128"]
+# NFQUEUE supports ACCEPT/DROP; REJECT rules are enforced as DROP.
+reject_emulation = "drop"
+
+[detection]
+enabled = true
+enable_quic_initial = true
+enable_tls_fingerprint = true
+enable_heuristics = true
+
+[policy]
+default_action = "allow"
+# ALLOW rules are evaluated before DROP/REJECT rules, regardless of priority.
+allow_overrides = true
+allowlist_cidrs = []
+blocklist_cidrs = []
+
+# Example rules. Remove or adapt them before enforcing.
+[[rules]]
+name = "block-plaintext-proxies"
+description = "Drop decoded SOCKS5, CONNECT, VLESS and Trojan handshakes."
+enabled = false
+priority = 500
+action = "drop"
+log = true
+
+[rules.match]
+protocols = ["socks5", "socks4", "http-connect", "xray-vless", "trojan-plaintext"]
+min_confidence = 0.9
+
+[[rules]]
+name = "allow-office-sni"
+description = "Allowlist a known destination before all block rules."
+enabled = false
+priority = 1
+action = "allow"
+log = false
+
+[rules.match]
+sni = ["*.office.example"]
+
+[[rules]]
+name = "monitor-quic"
+description = "Log all QUIC flows without blocking."
+enabled = false
+priority = 10
+action = "monitor"
+log = true
+
+[rules.match]
+protocols = ["quic"]
+min_confidence = 0.8

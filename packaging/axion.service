@@ -1,0 +1,29 @@
+[Unit]
+Description=Axion DPI and traffic enforcement engine
+Documentation=https://github.com/braydos-h/Axion
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Passive example. For inline enforcement, install nftables queue rules and add
+# --mode enforce (Axion then requires CAP_NET_ADMIN). The NFQUEUE rules should
+# include `bypass` for fail-open deployments.
+ExecStart=/usr/local/bin/axion --config /etc/axion/axion.toml start --mode monitor
+Restart=on-failure
+RestartSec=2s
+User=axion
+Group=axion
+AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN
+CapabilityBoundingSet=CAP_NET_RAW CAP_NET_ADMIN
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_PACKET AF_NETLINK AF_UNIX
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target

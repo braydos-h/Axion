@@ -24,10 +24,10 @@ jobs:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
       - uses: Swatinem/rust-cache@401aff9a7a08acb9d27b64936a90db81024cff97 # v2.8.2
-      - name: Install libpcap development files
-        run: sudo apt-get update && sudo apt-get install -y libpcap-dev
-      - run: cargo test --locked
-      - run: cargo build --release --locked
+      - name: Tests
+        run: cargo test --locked
+      - name: Build release
+        run: cargo build --release --locked
       - name: Smoke test release binary and embedded dashboard
         run: bash scripts/smoke-test.sh target/release/axion
       - name: Package executable and documentation
@@ -36,9 +36,15 @@ jobs:
         run: |
           set -euo pipefail
           version=$(cargo metadata --locked --no-deps --format-version 1 | python3 -c 'import json,sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"] == "axion"))')
-          mkdir -p package dist
+          mkdir -p package/config package/docs package/scripts package/packaging dist
           cp target/release/axion README.md LICENSE package/
-          tar -C package -czf "dist/axion-v${version}-linux-${ARCH}.tar.gz" axion README.md LICENSE
+          cp config/*.toml package/config/
+          cp docs/*.md package/docs/
+          cp scripts/install-nfqueue.sh package/scripts/
+          cp packaging/axion.service package/packaging/
+          tar -C package -czf "dist/axion-v${version}-linux-${ARCH}.tar.gz" \
+            axion README.md LICENSE config docs scripts packaging
+          sha256sum "dist/axion-v${version}-linux-${ARCH}.tar.gz"
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: axion-linux-${{ matrix.arch }}

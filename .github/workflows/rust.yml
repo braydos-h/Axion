@@ -10,8 +10,12 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  check:
+  checks:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
@@ -21,12 +25,36 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@401aff9a7a08acb9d27b64936a90db81024cff97 # v2.8.2
-      - name: Install libpcap development files
-        run: sudo apt-get update && sudo apt-get install -y libpcap-dev
-      - run: cargo fmt --all -- --check
-      - run: cargo clippy --all-targets --locked -- -D warnings
-      - run: cargo test --locked
-      - run: node tests/web-ui.cjs
-      - run: cargo build --release --locked
-      - name: Verify embedded dashboard in release binary
+      - name: Formatting
+        run: cargo fmt --all -- --check
+      - name: Clippy
+        run: cargo clippy --all-targets --locked -- -D warnings
+      - name: Unit and integration tests
+        run: cargo test --locked
+      - name: Embedded dashboard checks
+        run: node tests/web-ui.cjs
+      - name: Compile benchmarks
+        run: cargo bench --no-run --locked
+      - name: Release build
+        run: cargo build --release --locked
+      - name: Release binary smoke test
         run: bash scripts/smoke-test.sh target/release/axion
+
+  privileged:
+    runs-on: ubuntu-24.04
+    needs: checks
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: Swatinem/rust-cache@401aff9a7a08acb9d27b64936a90db81024cff97 # v2.8.2
+      - name: Install nftables and libpcap runtime
+        run: sudo apt-get update && sudo apt-get install -y nftables libpcap-dev
+      - name: Privileged capture and enforcement integration tests
+        run: |
+          set -euo pipefail
+          sudo -E env "PATH=$PATH" "CARGO_HOME=$HOME/.cargo" "RUSTUP_HOME=$HOME/.rustup" \
+            cargo test --test live_capture --locked -- --ignored --nocapture
+          sudo -E env "PATH=$PATH" "CARGO_HOME=$HOME/.cargo" "RUSTUP_HOME=$HOME/.rustup" \
+            cargo test --test enforcement --locked -- --ignored --nocapture

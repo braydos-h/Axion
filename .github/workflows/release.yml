@@ -49,6 +49,27 @@ jobs:
           test -f "axion-${TAG}-linux-aarch64.tar.gz"
           sha256sum "axion-${TAG}-linux-x86_64.tar.gz" "axion-${TAG}-linux-aarch64.tar.gz" > SHA256SUMS
           sha256sum --check SHA256SUMS
+      - name: Smoke test x86_64 release archive
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          mkdir -p smoke
+          tar -xzf "dist/axion-${TAG}-linux-x86_64.tar.gz" -C smoke
+          test -x smoke/axion
+          smoke/axion --version
+          smoke/axion config example >/dev/null
+          test -f smoke/config/axion.example.toml
+          test -f smoke/docs/DETECTION.md
+          test -f smoke/packaging/axion.service
+      - name: Verify asset architecture metadata
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          mkdir -p archcheck
+          tar -xzf "dist/axion-${TAG}-linux-aarch64.tar.gz" -C archcheck
+          file archcheck/axion
       - name: Create draft, verify all assets, then publish
         env:
           GH_TOKEN: ${{ github.token }}

@@ -1,5 +1,22 @@
-.env
-.env.txt
+# Rust
 /target
+/dist
+*.profraw
+*.profdata
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+axion.toml
+/axion.toml
+
+# Captures (fixtures are explicitly kept for tests/docs)
 *.pcap
 *.pcapng
+!tests/fixtures/*.pcap
+!tests/fixtures/*.pcapng
+
+# Python tooling
+__pycache__/
+*.pyc

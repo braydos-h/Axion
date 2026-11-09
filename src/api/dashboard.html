@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Axion DPI Console</title>
+  <link rel="stylesheet" href="/dashboard.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo">A</span>
+      <div>
+        <h1>AXION</h1>
+        <p class="subtitle">Rust-native deep packet inspection</p>
+      </div>
+    </div>
+    <div class="topbar-right">
+      <span id="status-dot" class="dot offline" title="API status"></span>
+      <span id="mode-badge" class="badge monitor">monitor</span>
+      <span id="version" class="muted">v0.1.0</span>
+    </div>
+  </header>
+
+  <div id="banner" class="banner hidden" role="alert"></div>
+  <div id="token-panel" class="token-panel hidden">
+    <label for="token-input">Management token</label>
+    <input id="token-input" type="password" autocomplete="off" placeholder="Bearer token">
+    <button id="token-save" type="button">Unlock</button>
+  </div>
+
+  <main>
+    <section class="controls">
+      <div class="control-group">
+        <span class="muted">Mode</span>
+        <button id="mode-monitor" class="btn" type="button">Monitor</button>
+        <button id="mode-enforce" class="btn" type="button">Enforce</button>
+        <button id="dry-run-btn" class="btn ghost" type="button">Dry run: off</button>
+      </div>
+      <div class="control-group">
+        <span id="backend" class="muted">backend: —</span>
+        <button id="reload-rules" class="btn ghost" type="button">Reload rules</button>
+      </div>
+    </section>
+    <p id="enforcement-note" class="note"></p>
+
+    <section class="cards">
+      <article class="card"><h2>Throughput</h2><p id="stat-bps" class="value">0 bps</p><p id="stat-bps-sub" class="muted">0 bytes total</p></article>
+      <article class="card"><h2>Packets/s</h2><p id="stat-pps" class="value">0</p><p id="stat-pps-sub" class="muted">0 packets total</p></article>
+      <article class="card"><h2>Active flows</h2><p id="stat-flows" class="value">0</p><p id="stat-flows-sub" class="muted">0 events buffered</p></article>
+      <article class="card"><h2>Blocked flows</h2><p id="stat-blocked" class="value">0</p><p id="stat-blocked-sub" class="muted">0 dropped packets</p></article>
+      <article class="card"><h2>Detections</h2><p id="stat-detections" class="value">0</p><p id="stat-detections-sub" class="muted">0 rules compiled</p></article>
+      <article class="card"><h2>CPU</h2><p id="stat-cpu" class="value">0%</p><p class="muted">process average</p></article>
+      <article class="card"><h2>Memory</h2><p id="stat-mem" class="value">0 MB</p><p class="muted">RSS</p></article>
+      <article class="card"><h2>Uptime</h2><p id="stat-uptime" class="value">0s</p><p id="stat-workers" class="muted">0 workers</p></article>
+    </section>
+
+    <section class="grid">
+      <article class="panel wide">
+        <div class="panel-head"><h2>Traffic rates</h2><span class="muted">recent history</span></div>
+        <canvas id="rate-chart" height="220"></canvas>
+      </article>
+      <article class="panel">
+        <div class="panel-head"><h2>Detected protocols</h2></div>
+        <div id="protocol-list" class="bars"><p class="muted">No classified flows yet.</p></div>
+      </article>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head"><h2>Detection events</h2><span class="muted">newest first</span></div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Time</th><th>Flow</th><th>Evidence</th><th>Confidence</th><th>Rule</th><th>Action</th></tr></thead>
+          <tbody id="events-body"><tr><td colspan="6" class="empty">Waiting for events…</td></tr></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="grid">
+      <article class="panel wide">
+        <div class="panel-head"><h2>Recent flows</h2><span class="muted">top 100</span></div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Flow</th><th>Protocols</th><th>SNI / DNS</th><th>Bytes</th><th>Proxy</th><th>Decision</th></tr></thead>
+            <tbody id="flows-body"><tr><td colspan="6" class="empty">No flows yet.</td></tr></tbody>
+          </table>
+        </div>
+      </article>
+      <article class="panel">
+        <div class="panel-head"><h2>Rules</h2><span id="rule-summary" class="muted"></span></div>
+        <div id="rules-list" class="rules"><p class="muted">Loading…</p></div>
+      </article>
+    </section>
+
+    <footer>
+      <p>Axion performs passive inspection unless an NFQUEUE backend is active. Encrypted payloads are classified only from observable metadata.</p>
+      <p>Management API binds to localhost by default. Use a token for any non-loopback deployment.</p>
+    </footer>
+  </main>
+  <script src="/dashboard.js"></script>
+</body>
+</html>
